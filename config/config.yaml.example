@@ -8,6 +8,8 @@ api:
   scope_id: null
 
 paths:
+  # Root directory for on-disk astronomy frames (repo sanity checks join this with API imagename paths).
+  repo-path: data/repo
   template_dir: templates
   output_dir: output
   fits_monitor_dir: data/fits
