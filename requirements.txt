@@ -6,3 +6,5 @@ python-json-logger
 psutil
 pytest
 pip-system-certs  # Needed for requests to not complain about SSL certificate
+
+astropy
