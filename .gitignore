@@ -1,2 +1,14 @@
 venv/
 src/__pycache__/
+
+
+# This is copied from the backend repo
+api/openapi.yaml
+
+# This is the actual config file for the runner. Don't commit it.
+config/config.yaml
+
+logs/
+
+
+tests/__pycache__/

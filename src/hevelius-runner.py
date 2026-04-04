@@ -1,6 +1,6 @@
 
 # This is the entry point for the hevelius-runner code.
-# 
+#
 # It integrates all components:
 # 1. Config Manager
 # 2. API Client
@@ -8,7 +8,7 @@
 # 4. File Monitor
 # 5. Script Executor
 # 6. NINA Controller
-# 
+#
 # It provides a complete workflow:
 # 1. Startup script execution
 # 2. Night time detection
@@ -16,45 +16,49 @@
 # 4. FITS file monitoring
 # 5. Status updates
 # 6. Clean shutdown
-# 
+#
 # It includes proper error handling and logging throughout
-# 
+#
 # It implements the main control loop that:
 # 1. Checks for night time
 # 2. Processes observation plans
 # 3. Monitors for new files
 # 4. Handles status updates
 
+import argparse
 import logging
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
+
+import yaml
 
 from config_manager import ConfigManager
-from api_client import APIClient
+from api_client import APIClient, resolve_scope_id_from_identifier
 from task_manager import TaskManager
 from file_monitor import FileMonitor, FileMonitorThread
 from script_executor import ScriptExecutor
 from nina_controller import NINAController
 from version import get_version
 
+
 class ObservatoryAutomation:
-    def __init__(self):
+    def __init__(self, config: ConfigManager):
         """Initialize the observatory automation system."""
         self.setup_logging()
         self.logger = logging.getLogger(__name__)
-        
+
         # Initialize components
-        self.config = ConfigManager()
+        self.config = config
         self.api_client = APIClient(self.config.get_api_config())
         self.task_manager = TaskManager(self.config.get_paths_config())
         self.file_monitor = FileMonitor(self.config.get_paths_config())
         self.script_executor = ScriptExecutor(self.config.get_scripts_config())
         self.nina_controller = NINAController(self.config.get_nina_config())
-        
+
         self.current_sequence_path = None
         self.observatory_id = "default"  # Should be configured or determined
 
@@ -62,7 +66,7 @@ class ObservatoryAutomation:
         """Configure logging for the application."""
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
-        
+
         # Full logging: format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         logging.basicConfig(
             level=logging.DEBUG,
@@ -81,44 +85,44 @@ class ObservatoryAutomation:
         """Main execution loop of the automation system."""
         try:
             self.logger.info(f"Starting havelius-runner {get_version()}")
-            
+
             # Execute startup script
             self.script_executor.execute_script('startup')
 
             # Ensure the API is reachable
             self.api_client.connect()
-            
+
             # Start file monitoring
             monitor_thread = FileMonitorThread(self.file_monitor)
             self.file_monitor.start(self.handle_new_fits_file)
             monitor_thread.start()
-            
+
             while True:
                 try:
                     current_date = datetime.now().date()
-                    
+
                     # Check if it's night time and execute night start script
                     if self.is_night_time():
                         self.script_executor.execute_script('night_start')
                         self.process_night_plan(current_date)
-                    
+
                     # Wait before next check
                     time.sleep(60)  # Check every minute
-                    
+
                 except KeyboardInterrupt:
                     self.logger.info("Received shutdown signal")
                     break
                 except Exception as e:
                     self.logger.error(f"Error in main loop: {str(e)}", exc_info=True)
                     time.sleep(300)  # Wait 5 minutes before retry
-            
+
         finally:
             self.cleanup()
 
     def process_night_plan(self, date: datetime.date):
         """
         Process the observation plan for a night.
-        
+
         Args:
             date: Date to process
         """
@@ -161,7 +165,7 @@ class ObservatoryAutomation:
     def handle_new_fits_file(self, file_path: str):
         """
         Handle newly detected FITS files.
-        
+
         Args:
             file_path: Path to the new FITS file
         """
@@ -175,20 +179,20 @@ class ObservatoryAutomation:
                     "completed",
                     [file_path]
                 )
-                
+
                 # Execute post-task script
                 self.script_executor.execute_script('post_task', {
                     'task_id': task_id,
                     'fits_file': file_path
                 })
-                
+
         except Exception as e:
             self.logger.error(f"Error handling FITS file: {str(e)}")
 
     def handle_nina_status(self, status: str):
         """
         Handle status updates from NINA.
-        
+
         Args:
             status: Status message from NINA
         """
@@ -198,7 +202,7 @@ class ObservatoryAutomation:
     def is_night_time(self) -> bool:
         """
         Check if it's currently night time for observations.
-        
+
         Returns:
             bool: True if it's night time
         """
@@ -210,10 +214,10 @@ class ObservatoryAutomation:
     def extract_task_id_from_fits(self, file_path: str) -> str:
         """
         Extract task ID from FITS file name or metadata.
-        
+
         Args:
             file_path: Path to the FITS file
-            
+
         Returns:
             str: Task ID
         """
@@ -224,22 +228,291 @@ class ObservatoryAutomation:
     def cleanup(self):
         """Clean up resources before shutdown."""
         self.logger.info("Shutting down Observatory Automation")
-        
+
         # Stop NINA if running
         if self.nina_controller.is_running():
             self.nina_controller.stop()
-        
+
         # Stop file monitor
         self.file_monitor.stop()
-        
+
         # Execute night end script
         self.script_executor.execute_script('night_end')
-        
+
         # Stop script executor
         self.script_executor.stop_all()
-        
+
         self.logger.info("Shutdown complete")
 
+
+def _require_loaded_config(cm: ConfigManager) -> int:
+    if cm.loaded:
+        return 0
+    print("Cannot continue without a valid configuration file.", file=sys.stderr)
+    return 1
+
+
+def cmd_config(cm: ConfigManager) -> int:
+    if not cm.loaded:
+        return 1
+    print(f"# hevelius-runner configuration file: {cm.config_path.resolve()}")
+    redacted = cm.redacted_copy()
+    print(yaml.dump(redacted, default_flow_style=False, sort_keys=False, allow_unicode=True).rstrip())
+    return 0
+
+
+def cmd_check(cm: ConfigManager) -> int:
+    code = _require_loaded_config(cm)
+    if code != 0:
+        return code
+
+    api_cfg = cm.get_api_config()
+    required_api = ("base_url", "timeout", "username", "password")
+    missing = [k for k in required_api if not str(api_cfg.get(k, "")).strip()]
+    if missing:
+        print(
+            f"API configuration is incomplete (missing: {', '.join(missing)}).",
+            file=sys.stderr,
+        )
+        return 1
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+    client = APIClient(api_cfg)
+    try:
+        version = client.get_version()
+        print(f"API reachable at {api_cfg['base_url'].rstrip('/')}/ - backend version: {version}")
+    except Exception as e:
+        print(f"API check failed (version endpoint): {e}", file=sys.stderr)
+        return 1
+
+    try:
+        login = client.login()
+        if not login.status or not login.token:
+            print(f"Login failed: {login.msg or 'no JWT token in response'}", file=sys.stderr)
+            return 1
+        print(f"Authenticated as {api_cfg['username']!r} (user id {login.user_id}).")
+    except Exception as e:
+        print(f"API check failed (login): {e}", file=sys.stderr)
+        return 1
+
+    try:
+        scopes = client.list_telescopes()
+        print(f"Telescopes available: {len(scopes)}")
+        sid = api_cfg.get("scope_id")
+        if sid is not None and str(sid).strip() != "":
+            want = int(sid)
+            ids = {int(t.get("scope_id")) for t in scopes if t.get("scope_id") is not None}
+            if want not in ids:
+                print(
+                    f"Configured api.scope_id={want} is not in the telescope list from the API.",
+                    file=sys.stderr,
+                )
+                return 1
+            names = [t.get("name") for t in scopes if int(t.get("scope_id", -1)) == want]
+            label = names[0] if names else "?"
+            print(f"Configured scope_id {want} OK ({label!r}).")
+        else:
+            print(
+                "Note: api.scope_id is not set; use `telescope list` and `telescope set`.",
+                file=sys.stderr,
+            )
+    except Exception as e:
+        print(f"API check failed (telescope list): {e}", file=sys.stderr)
+        return 1
+
+    nina_cfg = cm.get_nina_config()
+    exe = nina_cfg.get("executable_path", "")
+    nina_path = Path(str(exe)) if exe else None
+    if not nina_path or not nina_path.is_file():
+        print(
+            f"NINA executable not found or not configured: {exe!r}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"NINA executable found: {nina_path}")
+
+    print("Configuration and connectivity check passed.")
+    return 0
+
+
+def cmd_run(cm: ConfigManager) -> int:
+    code = _require_loaded_config(cm)
+    if code != 0:
+        return code
+    api = cm.get_api_config()
+    sid = api.get("scope_id")
+    if sid is None or str(sid).strip() == "":
+        print(
+            "api.scope_id is not set. Run: hevelius-runner telescope list\n"
+            "Then: hevelius-runner telescope set <id_or_name>",
+            file=sys.stderr,
+        )
+        return 1
+    app = ObservatoryAutomation(cm)
+    app.run()
+    return 0
+
+
+def cmd_version(args: argparse.Namespace, cm: ConfigManager) -> int:
+    print(f"hevelius-runner {get_version()}")
+    if not getattr(args, "backend", False):
+        return 0
+    if not cm.loaded:
+        print(
+            "Cannot query backend version: configuration file is missing or invalid.",
+            file=sys.stderr,
+        )
+        return 1
+    api = cm.get_api_config()
+    if not str(api.get("base_url", "")).strip():
+        print("api.base_url is missing; cannot query backend version.", file=sys.stderr)
+        return 1
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(message)s")
+    merged = {
+        **api,
+        "username": api.get("username") or "_",
+        "password": api.get("password") or "_",
+        "timeout": int(api.get("timeout", 30)),
+    }
+    client = APIClient(merged)
+    try:
+        ver = client.get_version()
+        print(f"Hevelius API version: {ver} ({api['base_url']})")
+    except Exception as e:
+        print(f"Could not reach API version endpoint: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_telescope_list(cm: ConfigManager) -> int:
+    code = _require_loaded_config(cm)
+    if code != 0:
+        return code
+    api_cfg = cm.get_api_config()
+    required = ("base_url", "timeout", "username", "password")
+    missing = [k for k in required if not str(api_cfg.get(k, "")).strip()]
+    if missing:
+        print(f"API configuration incomplete (missing: {', '.join(missing)}).", file=sys.stderr)
+        return 1
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+    client = APIClient(api_cfg)
+    try:
+        client.get_version()
+        client.login()
+        scopes = client.list_telescopes()
+    except Exception as e:
+        print(f"Failed to list telescopes: {e}", file=sys.stderr)
+        return 1
+    if not scopes:
+        print("No telescopes returned by the API.")
+        return 0
+    for t in scopes:
+        sid = t.get("scope_id")
+        name = t.get("name") or ""
+        print(f"scope_id={sid}\t{name}")
+    return 0
+
+
+def cmd_telescope_set(cm: ConfigManager, identifier: str) -> int:
+    code = _require_loaded_config(cm)
+    if code != 0:
+        return code
+    api_cfg = cm.get_api_config()
+    required = ("base_url", "timeout", "username", "password")
+    missing = [k for k in required if not str(api_cfg.get(k, "")).strip()]
+    if missing:
+        print(f"API configuration incomplete (missing: {', '.join(missing)}).", file=sys.stderr)
+        return 1
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+    client = APIClient(api_cfg)
+    try:
+        client.get_version()
+        client.login()
+        scope_id, matched_name = resolve_scope_id_from_identifier(client, identifier)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Failed to resolve telescope: {e}", file=sys.stderr)
+        return 1
+    try:
+        cm.write_api_scope_id(scope_id)
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    extra = f" ({matched_name!r})" if matched_name else ""
+    print(f"Wrote api.scope_id = {scope_id}{extra} to {cm.config_path}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Hevelius observatory runner - NINA integration and API client.",
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        default="config/config.yaml",
+        help="Path to YAML configuration; place this option before COMMAND (default: config/config.yaml)",
+    )
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
+    sub.add_parser("run", help="Start the automation loop.")
+    sub.add_parser("config", help="Print effective configuration (password redacted).")
+    sub.add_parser(
+        "check",
+        help="Verify YAML config, API reachability, JWT login, telescopes, and NINA executable path.",
+    )
+    p_ver = sub.add_parser("version", help="Print hevelius-runner version.")
+    p_ver.add_argument(
+        "--backend",
+        action="store_true",
+        help="Also query the Hevelius API /version endpoint (uses api.base_url from config).",
+    )
+    tel = sub.add_parser("telescope", help="List telescopes or set api.scope_id in the config file.")
+    tel_sub = tel.add_subparsers(dest="telescope_cmd", metavar="SUBCOMMAND", required=True)
+    tel_sub.add_parser(
+        "list",
+        help="Print scope_id and name for each telescope (JWT required).",
+    )
+    p_set = tel_sub.add_parser(
+        "set",
+        help="Resolve id or name and write api.scope_id to config.yaml.",
+    )
+    p_set.add_argument(
+        "identifier",
+        help="Numeric scope_id or exact telescope name (see telescope list).",
+    )
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    command = args.command
+
+    if command is None:
+        parser.print_help()
+        return 0
+
+    cm = ConfigManager(args.config)
+
+    if command == "run":
+        return cmd_run(cm)
+    if command == "config":
+        return cmd_config(cm)
+    if command == "check":
+        return cmd_check(cm)
+    if command == "version":
+        return cmd_version(args, cm)
+    if command == "telescope":
+        if args.telescope_cmd == "list":
+            return cmd_telescope_list(cm)
+        if args.telescope_cmd == "set":
+            return cmd_telescope_set(cm, args.identifier)
+
+    parser.print_help()
+    return 2
+
+
 if __name__ == "__main__":
-    app = ObservatoryAutomation()
-    app.run() 
+    raise SystemExit(main())
