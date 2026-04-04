@@ -10,6 +10,8 @@ jobs:
   test:
     name: Python ${{ matrix.python-version }} (Windows)
     runs-on: windows-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
