@@ -41,7 +41,7 @@ https://stackoverflow.com/questions/23885449/unable-to-resolve-unable-to-get-loc
 
 
 ```bash
-git clone https://github.com/tomaszmrugalski/hevelius-runner.git
+git clone https://github.com/borowka-obs/hevelius-runner.git
 cd hevelius-runner
 ```
 
@@ -59,22 +59,38 @@ pip install -r requirements.txt
 
 ## Configuration
 
-1. Copy `config.ini.example` to `config.ini`
+1. Copy `config/config.yaml.example` to `config/config.yaml`
 2. Update the configuration with your settings:
-   - Database credentials
-   - API endpoints
+   - API credentials and base URL
    - Directory paths
    - NINA executable location
    - Custom script paths
 
 ## Usage
 
-Run the application:
+Global options (such as `-c` / `--config`) must come **before** the subcommand.
+
+If you run the program with **no subcommand**, usage and the list of commands are printed.
+
+Run the automation loop:
+
 ```bash
-python src/hevelius-runner.py
+python src/hevelius-runner.py run
 ```
 
-The application will:
+Print effective configuration (password redacted):
+
+```bash
+python src/hevelius-runner.py -c config/config.yaml config
+```
+
+Verify configuration, API reachability, login, and NINA executable path:
+
+```bash
+python src/hevelius-runner.py check
+```
+
+The `run` command will:
 1. Load configuration
 2. Execute startup scripts
 3. Monitor for nighttime
@@ -86,7 +102,7 @@ The application will:
 ```
 hevelius-runner/
 ├── config/
-│   ├── config.ini
+│   ├── config.yaml
 │   └── templates/
 │       └── sequence_template.json
 ├── src/

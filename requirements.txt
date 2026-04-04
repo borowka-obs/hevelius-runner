@@ -1,7 +1,8 @@
-configparser
+PyYAML
 requests
 psycopg2-binary
 watchdog
 python-json-logger
 psutil
+pytest
 pip-system-certs  # Needed for requests to not complain about SSL certificate

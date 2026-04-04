@@ -1,0 +1,22 @@
+api:
+  base_url: https://hevelius.borowka.space:5001/api/
+  timeout: 30
+  username: your-username
+  password: your-password
+  verify_ssl: true
+  # Night plan telescope; set with: hevelius-runner telescope set <id_or_name>
+  scope_id: null
+
+paths:
+  template_dir: templates
+  output_dir: output
+  fits_monitor_dir: data/fits
+
+nina:
+  executable_path: C:/usr/NINA/nina.exe
+
+scripts:
+  startup_script: scripts/startup_script.py
+  night_start_script: scripts/night_start.py
+  night_end_script: scripts/night_end.py
+  post_task_script: scripts/post_task.py
