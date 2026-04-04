@@ -2,7 +2,7 @@ import logging
 import re
 import requests
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import certifi
@@ -245,6 +245,59 @@ class APIClient:
         ver = self.get_version()
         self.logger.info(f"Backend ({self.base_url}) reachable, returned version is {ver}")
         self.login()
+
+    def find_tasks_by_filename(self, filename: str) -> Tuple[bool, List[Dict[str, Any]]]:
+        """
+        GET /api/task-find-by-filename — tasks whose stored imagename path ends with ``filename``.
+        """
+        url = _join_api(self.base_url, "task-find-by-filename")
+        self.logger.info("Finding tasks by filename suffix: %s", filename[:80] + ("…" if len(filename) > 80 else ""))
+        response = self.session.get(
+            url,
+            params={"filename": filename},
+            timeout=self.timeout,
+            headers=self._get_auth_headers(),
+        )
+        response.raise_for_status()
+        data = response.json()
+        found = bool(data.get("found"))
+        matches = data.get("matches")
+        if not isinstance(matches, list):
+            matches = []
+        return found, matches
+
+    def list_all_tasks_filenames(self, per_page: int = 5000) -> List[tuple]:
+        """
+        GET /api/tasks-filename-list — paginated [task_id, filename] rows for every task.
+
+        ``task-find-by-filename`` matches one suffix per call; this endpoint is used to
+        retrieve the full catalog (see OpenAPI ``TasksFilenameListResponse``).
+        """
+        per_page = max(1, min(int(per_page), 5000))
+        all_rows: List[Tuple[int, Optional[str]]] = []
+        page = 1
+        while True:
+            url = _join_api(self.base_url, "tasks-filename-list")
+            self.logger.info("Fetching tasks filename list page %s", page)
+            response = self.session.get(
+                url,
+                params={"page": page, "per_page": per_page},
+                timeout=self.timeout,
+                headers=self._get_auth_headers(),
+            )
+            response.raise_for_status()
+            data = response.json()
+            rows = data.get("rows") or []
+            for row in rows:
+                if isinstance(row, (list, tuple)) and len(row) >= 2:
+                    tid = int(row[0])
+                    fn = row[1]
+                    all_rows.append((tid, fn if fn is not None else None))
+            pages = int(data.get("pages") or 1)
+            if page >= pages:
+                break
+            page += 1
+        return all_rows
 
 
 def resolve_scope_id_from_identifier(

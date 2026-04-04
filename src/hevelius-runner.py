@@ -43,7 +43,7 @@ from file_monitor import FileMonitor, FileMonitorThread
 from script_executor import ScriptExecutor
 from nina_controller import NINAController
 from version import get_version
-
+from cmd_repo import cmd_repo
 
 class ObservatoryAutomation:
     def __init__(self, config: ConfigManager):
@@ -462,8 +462,8 @@ def build_parser() -> argparse.ArgumentParser:
         "check",
         help="Verify YAML config, API reachability, JWT login, telescopes, and NINA executable path.",
     )
-    p_ver = sub.add_parser("version", help="Print hevelius-runner version.")
-    p_ver.add_argument(
+    version_parser = sub.add_parser("version", help="Print hevelius-runner version.")
+    version_parser.add_argument(
         "--backend",
         action="store_true",
         help="Also query the Hevelius API /version endpoint (uses api.base_url from config).",
@@ -482,8 +482,20 @@ def build_parser() -> argparse.ArgumentParser:
         "identifier",
         help="Numeric scope_id or exact telescope name (see telescope list).",
     )
-    return parser
 
+    repo_parser = sub.add_parser('repo', help="Manages files repository on local storage.")
+    repo_parser.add_argument('-f', "--file", help="Reads a single FITS file", type=str)
+    repo_parser.add_argument("-l", "--list", help="Reads a list of FITS files (one filename per line)", type=str)
+    repo_parser.add_argument("-d", "--dir",   help="Reads all FITS files recursively", type=str)
+    repo_parser.add_argument("-s", "--show-header", help="Displays all entries in FITS header", action='store_true')
+    repo_parser.add_argument("-t", "--dry-run", help="Don't do the actual DB upsert", action='store_true')
+    repo_parser.add_argument("--sanity-db", help="Goes through the list of tasks in a database and checks if all files are present", action='store_true')
+    repo_parser.add_argument("--sanity-files", help="Goes through the list of files and check if related tasks are present", action='store_true')
+    repo_parser.add_argument("--min-task-id", help="Minimum task ID to check (for sanity-db)", type=int)
+    repo_parser.add_argument("--max-task-id", help="Maximum task ID to check (for sanity-db)", type=int)
+    repo_parser.add_argument("--delete-invalid", help="Delete invalid tasks (no filename or missing file) when using sanity-db", action='store_true')
+
+    return parser
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
@@ -509,6 +521,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_telescope_list(cm)
         if args.telescope_cmd == "set":
             return cmd_telescope_set(cm, args.identifier)
+    if args.command == "repo":
+        return cmd_repo(cm, args)  # see cmd_repo.py
 
     parser.print_help()
     return 2
