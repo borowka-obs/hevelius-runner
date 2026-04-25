@@ -1,7 +1,7 @@
 import logging
 import time
 from pathlib import Path
-from typing import Callable, Dict, Set
+from typing import Any, Callable, Dict, List, Set, Tuple
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent
 import threading
@@ -79,18 +79,53 @@ class FITSHandler(FileSystemEventHandler):
         self.logger.warning(f"Timeout waiting for file to be ready: {file_path}")
 
 class FileMonitor:
-    def __init__(self, config: Dict[str, str]):
+    def __init__(self, config: Dict[str, Any]):
         """
         Initialize the file monitor.
         
         Args:
             config: Dictionary containing monitoring configuration
         """
-        self.monitor_dir = Path(config['fits_monitor_dir'])
+        self.monitor_volumes = self._parse_monitor_volumes(config)
         self.logger = logging.getLogger(__name__)
         self.observer = Observer()
         self._stop_event = threading.Event()
         self._callback = None
+
+    def _parse_monitor_volumes(self, config: Dict[str, Any]) -> List[Tuple[Path, str]]:
+        volumes_raw = config.get("volumes")
+        parsed: List[Tuple[Path, str]] = []
+
+        if isinstance(volumes_raw, list):
+            for idx, volume in enumerate(volumes_raw):
+                if isinstance(volume, str):
+                    nickname = f"volume-{idx + 1}"
+                    parsed.append((Path(volume), nickname))
+                    continue
+
+                if isinstance(volume, dict):
+                    raw_path = volume.get("path")
+                    if not raw_path:
+                        raise ValueError(f"paths.volumes[{idx}] is missing required key 'path'")
+                    nickname = str(volume.get("nickname") or f"volume-{idx + 1}")
+                    parsed.append((Path(str(raw_path)), nickname))
+                    continue
+
+                raise ValueError(
+                    f"paths.volumes[{idx}] must be a string or mapping with 'path' and optional 'nickname'"
+                )
+
+        if parsed:
+            return parsed
+
+        # Backward compatibility with old config key.
+        fallback_dir = config.get("fits_monitor_dir")
+        if fallback_dir:
+            return [(Path(str(fallback_dir)), "default")]
+
+        raise ValueError(
+            "No FITS monitor directories configured. Set paths.volumes in your config."
+        )
 
     def start(self, callback: Callable[[str], None]):
         """
@@ -101,14 +136,15 @@ class FileMonitor:
         """
         self._callback = callback
         
-        # Create monitor directory if it doesn't exist
-        self.monitor_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Set up and start the observer
+        # Set up and start observers for all configured volumes
         handler = FITSHandler(callback)
-        self.observer.schedule(handler, str(self.monitor_dir), recursive=False)
-        
-        self.logger.info(f"Starting file monitor in directory: {self.monitor_dir}")
+        for volume_path, nickname in self.monitor_volumes:
+            volume_path.mkdir(parents=True, exist_ok=True)
+            self.observer.schedule(handler, str(volume_path), recursive=False)
+            self.logger.info(
+                f"Starting file monitor in volume '{nickname}': {volume_path}"
+            )
+
         self.observer.start()
 
     def stop(self):
@@ -128,12 +164,15 @@ class FileMonitor:
         return self.observer.is_alive()
 
     def process_existing_files(self):
-        """Process any existing FITS files in the monitor directory."""
+        """Process any existing FITS files in all monitor volumes."""
         try:
-            for file_path in self.monitor_dir.glob("*.fits"):
-                if self._callback and file_path.is_file():
-                    self.logger.info(f"Processing existing file: {file_path}")
-                    self._callback(str(file_path))
+            for volume_path, nickname in self.monitor_volumes:
+                for file_path in volume_path.glob("*.fits"):
+                    if self._callback and file_path.is_file():
+                        self.logger.info(
+                            f"Processing existing file from volume '{nickname}': {file_path}"
+                        )
+                        self._callback(str(file_path))
         except Exception as e:
             self.logger.error(f"Error processing existing files: {str(e)}")
 

@@ -5,10 +5,19 @@ import glob
 import logging
 import os
 import sys
-from astropy.io import fits
 from typing import List, Optional, Tuple
 
-from fits import get_int_header, get_float_header, get_string_header
+from fits import (
+    get_int_header,
+    get_float_header,
+    get_string_header,
+    parse_solved,
+    parse_quality,
+    gets,
+    getf,
+    geti,
+    read_fits,
+)
 
 from api_client import APIClient
 from config_manager import ConfigManager
@@ -81,6 +90,54 @@ def _repo_path_from_config(cm: ConfigManager) -> Optional[str]:
         )
         return None
     return os.path.expanduser(os.path.expandvars(str(raw).strip()))
+
+
+def _monitor_volumes_from_config(cm: ConfigManager) -> List[Tuple[str, str]]:
+    """
+    Return configured FITS monitor volumes as ``[(path, nickname), ...]``.
+
+    Supports new ``paths.volumes`` and legacy ``paths.fits_monitor_dir`` fallback.
+    """
+    paths = cm.get_paths_config()
+    volumes_raw = paths.get("volumes")
+    volumes: List[Tuple[str, str]] = []
+
+    if isinstance(volumes_raw, list):
+        for idx, volume in enumerate(volumes_raw):
+            if isinstance(volume, str):
+                p = os.path.expanduser(os.path.expandvars(volume.strip()))
+                if p:
+                    volumes.append((p, f"volume-{idx + 1}"))
+                continue
+
+            if isinstance(volume, dict):
+                raw_path = volume.get("path")
+                if raw_path is None or not str(raw_path).strip():
+                    print(
+                        f"paths.volumes[{idx}] is missing required key 'path'.",
+                        file=sys.stderr,
+                    )
+                    continue
+                p = os.path.expanduser(os.path.expandvars(str(raw_path).strip()))
+                nickname = str(volume.get("nickname") or f"volume-{idx + 1}")
+                volumes.append((p, nickname))
+                continue
+
+            print(
+                f"paths.volumes[{idx}] must be either a string path or mapping "
+                f"with keys 'path' and optional 'nickname'.",
+                file=sys.stderr,
+            )
+
+    if volumes:
+        return volumes
+
+    legacy = paths.get("fits_monitor_dir")
+    if legacy is not None and str(legacy).strip():
+        p = os.path.expanduser(os.path.expandvars(str(legacy).strip()))
+        return [(p, "default")]
+
+    return []
 
 def process_fits_list(client: APIClient, fname: str, show_hdr: bool, dry_run: bool) -> None:
     """
@@ -287,14 +344,26 @@ def sanity_files(cm: ConfigManager, args) -> int:
 
     if args.dir:
         path = args.dir
-    else:
+        print(f"Processing all *.fit files in dir: {path}")
+        process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
+        return 0
+
+    volumes = _monitor_volumes_from_config(cm)
+    if not volumes:
         rp = _repo_path_from_config(cm)
         if rp is None:
+            print(
+                "No source paths configured for --sanity-files. Configure paths.volumes "
+                "(or legacy paths.fits_monitor_dir).",
+                file=sys.stderr,
+            )
             return 1
-        path = rp
+        volumes = [(rp, "repo-path")]
 
-    print(f"Processing all *.fit files in dir: {path}")
-    process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
+    print(f"Processing all *.fit/*.fits files across {len(volumes)} configured volume(s).")
+    for path, nickname in volumes:
+        print(f"Volume '{nickname}': {path}")
+        process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
     return 0
 
 

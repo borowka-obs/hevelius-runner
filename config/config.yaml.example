@@ -12,7 +12,11 @@ paths:
   repo-path: data/repo
   template_dir: templates
   output_dir: output
-  fits_monitor_dir: data/fits
+  # One or more FITS watch locations; each volume can define an optional nickname.
+  volumes:
+    - path: 'C:\astro\fits-live'
+      nickname: live
+    - path: 'D:\astro\fits-archive'
 
 nina:
   executable_path: C:/usr/NINA/nina.exe
