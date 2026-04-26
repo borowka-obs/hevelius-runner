@@ -94,6 +94,7 @@ class APIClient:
         self._username = config["username"]
         self._password = config["password"]
         self._token: Optional[str] = None
+        self._user_id: Optional[int] = None
         sid = config.get("scope_id")
         if sid is None or (isinstance(sid, str) and not str(sid).strip()):
             self._scope_id: Optional[int] = None
@@ -130,6 +131,7 @@ class APIClient:
             login_response = LoginResponse.from_json(data)
             if login_response.status and login_response.token:
                 self._token = login_response.token
+                self._user_id = login_response.user_id if login_response.user_id else None
                 self.logger.info("Authentication successful (JWT received)")
             elif login_response.status:
                 self.logger.error("Login reported success but no token was returned")
@@ -298,6 +300,55 @@ class APIClient:
                 break
             page += 1
         return all_rows
+
+    def get_current_user_id(self) -> int:
+        """
+        Resolve current authenticated user_id from login state or /api/users/me.
+        """
+        if self._user_id is not None:
+            return int(self._user_id)
+
+        url = _join_api(self.base_url, "users/me")
+        response = self.session.get(
+            url,
+            timeout=self.timeout,
+            headers=self._get_auth_headers(),
+        )
+        response.raise_for_status()
+        data = response.json()
+        user_id = data.get("user_id")
+        if user_id is None:
+            raise ValueError("API /users/me did not return user_id")
+        self._user_id = int(user_id)
+        return int(self._user_id)
+
+    def task_add(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        POST /api/task-add
+        """
+        url = _join_api(self.base_url, "task-add")
+        response = self.session.post(
+            url,
+            json=payload,
+            timeout=self.timeout,
+            headers=self._get_auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def task_update(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        POST /api/task-update
+        """
+        url = _join_api(self.base_url, "task-update")
+        response = self.session.post(
+            url,
+            json=payload,
+            timeout=self.timeout,
+            headers=self._get_auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 def resolve_scope_id_from_identifier(

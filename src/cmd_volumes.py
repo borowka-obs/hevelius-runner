@@ -8,14 +8,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from fits import (
-    get_int_header,
-    get_float_header,
-    get_string_header,
-    parse_solved,
-    parse_quality,
     gets,
-    getf,
-    geti,
     read_fits,
 )
 
@@ -139,7 +132,7 @@ def _monitor_volumes_from_config(cm: ConfigManager) -> List[Tuple[str, str]]:
 
     return []
 
-def process_fits_list(client: APIClient, fname: str, show_hdr: bool, dry_run: bool) -> None:
+def process_fits_list(client: APIClient, fname: str, show_hdr: bool, dry_run: bool, update_task: bool) -> None:
     """
     Processes all FITS files listed in a specified text file.
 
@@ -162,11 +155,11 @@ def process_fits_list(client: APIClient, fname: str, show_hdr: bool, dry_run: bo
             continue
 
         print(f"Processing file {cnt} of {total}: {line}")
-        process_fits_file(client, line, show_hdr=show_hdr, dry_run=dry_run)
+        process_fits_file(client, line, show_hdr=show_hdr, dry_run=dry_run, update_task=update_task)
         cnt += 1
 
 
-def process_fits_dir(client: APIClient, dir: str, show_hdr: bool, dry_run: bool) -> None:
+def process_fits_dir(client: APIClient, dir: str, show_hdr: bool, dry_run: bool, update_task: bool) -> None:
     """
     Processes all FITS files in specified directory.
 
@@ -190,19 +183,26 @@ def process_fits_dir(client: APIClient, dir: str, show_hdr: bool, dry_run: bool)
 
     for f in files:
         print(f"Processing file {cnt} of {total}: {f}")
-        process_fits_file(client, str(f), show_hdr, dry_run)
+        process_fits_file(client, str(f), show_hdr, dry_run=dry_run, update_task=update_task)
         cnt += 1
 
 
-def process_fits_file(client: APIClient, fname, show_hdr: bool, verbose: bool = False, dry_run: bool = False):
+def process_fits_file(
+    client: APIClient,
+    fname,
+    show_hdr: bool,
+    verbose: bool = False,
+    dry_run: bool = False,
+    update_task: bool = False,
+):
     """Processes a FITS file: optional header dump and task lookup via the API."""
 
     key = os.path.basename(fname)
 
     # Extract file parameters from the header
     h = read_fits(fname)
-    filter = gets(h, 'FILTER')
-    object = gets(h, 'OBJECT')
+    filter = _h_str(h, "FILTER")
+    object = _h_str(h, "OBJECT")
 
     task = get_task_by_filename(client, key)
     if task:
@@ -218,101 +218,112 @@ def process_fits_file(client: APIClient, fname, show_hdr: bool, verbose: bool = 
     # OK, so we have a file on disk and there might or might not be a task for it.
     # TODO: add ability to insert new or update existing task.
 
+    if not update_task:
+        print("  Task DB update skipped (pass --task to enable API upsert).")
+        return
+
     if dry_run:
-        print(f"  Task {task[0]} or creation update skipped (--dry-run).")
+        print("  Task DB update skipped (--dry-run).")
         return
 
     if task:
-        task_update(client, fname, task[0], verbose=verbose, dry_run=dry_run)
-    else:
-        task_add(client, fname)
+        task_update(client, fname, task[0], verbose=verbose)
+        return
+    task_add(client, fname, verbose=verbose)
 
 
-def task_add(client: APIClient, fname):
-    """Adds a new task based on a image filename, specified by fname. The
-       filename parsing is already done by parse_iteleskop_name() and stored in
-       details dict."""
+def _h_str(h, key: str) -> Optional[str]:
+    try:
+        v = gets(h, key)
+    except Exception:
+        return None
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s if s else None
 
-    # TODO: implement this, use the API.
+
+def _h_float(h, key: str) -> Optional[float]:
+    s = _h_str(h, key)
+    if s is None:
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
 
 
-def task_update(client: APIClient, fname: str, task_id: int, verbose=False, dry_run=False):
+def _h_int(h, key: str) -> Optional[int]:
+    s = _h_str(h, key)
+    if s is None:
+        return None
+    try:
+        return int(float(s))
+    except (TypeError, ValueError):
+        return None
 
-    # TODO: rewrite this to use the API.
+
+def _extract_task_payload_from_header(client: APIClient, h, fname: str) -> Tuple[dict, List[str]]:
+    payload = {
+        "scope_id": client._scope_id,
+        "user_id": client.get_current_user_id(),
+        "object": _h_str(h, "OBJECT"),
+        "ra": parse_ra(_h_str(h, "OBJCTRA")) if _h_str(h, "OBJCTRA") else None,
+        "decl": parse_dec(_h_str(h, "OBJCTDEC")) if _h_str(h, "OBJCTDEC") else None,
+        "exposure": _h_float(h, "EXPTIME"),
+        "filter": _h_str(h, "FILTER"),
+        "binning": _h_int(h, "XBINNING"),
+        "imagename": fname,
+        "state": 6,
+    }
+
+    missing = [k for k in ("user_id", "ra", "decl", "imagename") if payload.get(k) is None]
+    payload = {k: v for k, v in payload.items() if v is not None}
+    return payload, missing
+
+
+def task_add(client: APIClient, fname: str, verbose: bool = False):
+    """Add a task using FITS-derived values and POST /api/task-add."""
+    h = read_fits(fname)
+    payload, missing = _extract_task_payload_from_header(client, h, fname)
+    if missing:
+        print(
+            f"Task add skipped for {fname!r}: missing required fields for /api/task-add: {', '.join(missing)}.",
+            file=sys.stderr,
+        )
+        return
+    res = client.task_add(payload)
+    if verbose:
+        print(f"task-add payload={payload!r}")
+    if not res.get("status"):
+        print(f"Task add failed for {fname!r}: {res.get('msg', 'unknown error')}", file=sys.stderr)
+        return
+    print(f"  Task created: task_id={res.get('task_id')} for {fname!r}")
+
+
+def task_update(client: APIClient, fname: str, task_id: int, verbose=False):
 
     h = read_fits(fname)
 
+    payload = {
+        "task_id": task_id,
+        "object": _h_str(h, "OBJECT"),
+        "ra": parse_ra(_h_str(h, "OBJCTRA")) if _h_str(h, "OBJCTRA") else None,
+        "decl": parse_dec(_h_str(h, "OBJCTDEC")) if _h_str(h, "OBJCTDEC") else None,
+        "exposure": _h_float(h, "EXPTIME"),
+        "filter": _h_str(h, "FILTER"),
+        "binning": _h_int(h, "XBINNING"),
+        "imagename": fname,
+        "state": 6,
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    res = client.task_update(payload)
     if verbose:
-        print(f"Header file: {repr(h)}")
-
-    query = "UPDATE tasks SET "
-
-    query += get_int_header(h, "he_resx", "NAXIS1")
-    query += get_int_header(h, "he_resy", "NAXIS2")
-
-    query += f"he_obsstart='{gets(h, 'DATE-OBS')}', "
-    query += f"he_exposure={getf(h, 'EXPTIME')}, "
-
-    query += get_float_header(h, "he_settemp", "SET-TEMP")
-    query += get_float_header(h, "he_ccdtemp", "CCD-TEMP")
-
-    query += f"he_pixwidth={getf(h, 'XPIXSZ')}, "
-    query += f"he_pixheight={getf(h, 'YPIXSZ')}, "
-    query += f"he_xbinning={geti(h, 'XBINNING')}, "
-    query += f"he_ybinning={geti(h, 'YBINNING')}, "
-    query += f"he_filter='{gets(h, 'FILTER')}', "
-
-    if "OBJCTRA" in h:
-        query += f"he_objectra={parse_ra(gets(h, 'OBJCTRA'))}, "
-        query += f"he_objectdec={parse_dec(gets(h, 'OBJCTDEC'))}, "
-
-    query += get_float_header(h, "he_objectalt", "OBJCTALT")
-    query += get_float_header(h, "he_objectaz", "OBJCTAZ")
-    query += get_float_header(h, "he_objectha", "OBJCTHA")
-    query += get_string_header(h, "he_pierside", "PIERSIDE")
-
-    query += f"he_site_lat={parse_degms(gets(h, 'SITELAT'))}, "
-    query += f"he_site_lon={parse_degms(gets(h, 'SITELONG'))}, "
-
-    query += f"he_jd={getf(h, 'JD')}, "
-
-    query += get_float_header(h, "he_jd_helio", "JD-HELIO")
-
-    query += get_float_header(h, "he_tracktime", "TRAKTIME")
-
-    query += f"he_focal={getf(h, 'FOCALLEN')}, "
-    query += f"he_aperture_diam={getf(h, 'APTDIA')}, "
-    query += f"he_aperture_area={getf(h, 'APTAREA')}, "
-    query += f"he_scope='{gets(h, 'TELESCOP')}', "
-    query += f"he_camera='{gets(h, 'INSTRUME')}', "
-
-    query += get_float_header(h, "he_moon_alt", 'MOONWYS')
-    query += get_float_header(h, "he_moon_angle", 'MOONKAT')
-    query += get_float_header(h, "he_moon_phase", 'MOONFAZA')
-    query += get_float_header(h, "he_sun_alt", 'SUN')
-    # sets he_solved, he_solved_ra, he_solved_dec, he_solved_x, he_solved_y
-    query += parse_solved(h)
-
-    query += parse_quality(h)  # gets FWHM, number of stars recognized
-
-    # meaningless, but it's hard to tell if q ends with a , or not at this point.
-    query += " task_id=task_id"
-
-    query += f" WHERE task_id={task_id};"
-
-    if verbose:
-        print(query, file=sys.stderr)
-
-    if dry_run:
-        print(f"Task {task_id} update skipped (--dry-run).")
-    else:
-        print(
-            f"Task {task_id}: FITS-derived SQL update is not sent to the API "
-            f"(no task column-update endpoint in client); query was not executed.",
-            file=sys.stderr,
-        )
-        if verbose:
-            print(query, file=sys.stderr)
+        print(f"task-update payload={payload!r}")
+    if not res.get("status"):
+        print(f"Task {task_id} update failed: {res.get('msg', 'unknown error')}", file=sys.stderr)
+        return
+    print(f"  Task updated via API: task_id={task_id}")
 
 
 def parse_ra(s):
@@ -352,18 +363,18 @@ def sanity_files(cm: ConfigManager, args) -> int:
 
     if args.file:
         print(f"Processing single file: {args.file}")
-        process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run)
+        process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, update_task=args.task)
         return 0
 
     if args.list:
         print(f"Processing list of files stored in {args.list}")
-        process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run)
+        process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, update_task=args.task)
         return 0
 
     if args.dir:
         path = args.dir
         print(f"Processing all files in dir: {path}")
-        process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
+        process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=args.task)
         return 0
 
     volumes = _monitor_volumes_from_config(cm)
@@ -381,7 +392,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
     print(f"Processing all *.fit/*.fits files across {len(volumes)} configured volume(s).")
     for path, nickname in volumes:
         print(f"Volume '{nickname}': {path}")
-        process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
+        process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=args.task)
     return 0
 
 
