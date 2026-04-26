@@ -476,11 +476,11 @@ def sanity_db(cm: ConfigManager, args) -> int:
 def cmd_volumes(cm: ConfigManager, args) -> int:
     """Manages the on disk images repository."""
 
-    if args.sanity_files:
+    if args.file or args.list or args.dir or args.all_files:
         return sanity_files(cm, args)
 
     if args.sanity_db:
         return sanity_db(cm, args)
 
-    print("ERROR: No sanity check selected. Use --sanity-files or --sanity-db to check the repository.")
+    print("ERROR: No sanity check selected. Use -d (--dir) or -l (--list) or -f (--file) or -a (--all-files) or --sanity-db to check the repository.")
     return 1
