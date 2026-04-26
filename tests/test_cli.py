@@ -63,7 +63,7 @@ def test_config_command_prints_yaml_without_password(tmp_path, capsys, runner_mo
     assert str(cfg.resolve()) in out
 
 
-def test_check_command_success(tmp_path, capsys, runner_mod):
+def test_doctor_command_success(tmp_path, capsys, runner_mod):
     cfg = tmp_path / "c.yaml"
     fake_nina = tmp_path / "nina_fake.exe"
     fake_nina.write_bytes(b"")
@@ -102,7 +102,7 @@ def test_check_command_success(tmp_path, capsys, runner_mod):
         client.list_telescopes.return_value = [{"scope_id": 1, "name": "Test"}]
         MockClient.return_value = client
 
-        ret = runner_mod.main(["-c", str(cfg), "check"])
+        ret = runner_mod.main(["-c", str(cfg), "doctor"])
         assert ret == 0
         out = capsys.readouterr().out
         assert "1.0.0" in out
