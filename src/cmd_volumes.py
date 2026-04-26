@@ -5,7 +5,7 @@ import glob
 import logging
 import os
 import sys
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from fits import (
     gets,
@@ -13,6 +13,7 @@ from fits import (
 )
 
 from api_client import APIClient
+from cmd_projects import _get_projects_from_endpoint
 from config_manager import ConfigManager
 
 
@@ -132,12 +133,95 @@ def _monitor_volumes_from_config(cm: ConfigManager) -> List[Tuple[str, str]]:
 
     return []
 
+
+def _scope_id_from_config(cm: ConfigManager) -> Optional[int]:
+    raw = cm.get_api_config().get("scope_id")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_projects_list(client: APIClient, scope_id: int) -> List[Dict[str, Any]]:
+    candidates = ("projects", "project-list")
+    last_error: Optional[Exception] = None
+    for endpoint in candidates:
+        try:
+            rows = _get_projects_from_endpoint(client, endpoint, scope_id)
+            if rows is not None:
+                return rows
+        except Exception as e:
+            last_error = e
+    if last_error is not None:
+        raise last_error
+    return []
+
+
+def _project_name(project: Dict[str, Any]) -> str:
+    for key in ("name", "project_name"):
+        val = project.get(key)
+        if val is not None:
+            s = str(val).strip()
+            if s:
+                return s
+    return ""
+
+
+def _find_project_for_filename(filename: str, projects: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    key = os.path.basename(filename).lower()
+    for project in projects:
+        name = _project_name(project).lower()
+        if name and name in key:
+            return project
+    return None
+
+
+def _update_project_stats(
+    project_stats: Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]],
+    project_name: str,
+    filter_name: Optional[str],
+    exposure: Optional[float],
+) -> None:
+    per_project = project_stats.setdefault(project_name, {})
+    bucket = (filter_name, exposure)
+    per_project[bucket] = per_project.get(bucket, 0) + 1
+
+
+def _print_project_stats(
+    project_stats: Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]],
+    files_without_project: int,
+) -> None:
+    print()
+    print("=== PROJECT STATISTICS ===")
+    print(f"Files without project match: {files_without_project}")
+    if not project_stats:
+        print("No project subframes were matched.")
+        return
+    for project_name in sorted(project_stats.keys()):
+        print(f"Project: {project_name}")
+        buckets = project_stats[project_name]
+        total = sum(buckets.values())
+        print(f"  Total matched files: {total}")
+        for (filter_name, exposure), count in sorted(
+            buckets.items(),
+            key=lambda item: (
+                "" if item[0][0] is None else str(item[0][0]),
+                -1.0 if item[0][1] is None else float(item[0][1]),
+            ),
+        ):
+            print(f"  filter={filter_name} exposure={exposure} -> {count}")
+
 def process_fits_list(
     client: APIClient,
     fname: str,
     show_hdr: bool,
     dry_run: bool,
     update_task: bool = False,
+    projects: Optional[List[Dict[str, Any]]] = None,
+    project_stats: Optional[Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]]] = None,
+    project_tracker: Optional[Dict[str, int]] = None,
 ) -> None:
     """
     Processes all FITS files listed in a specified text file.
@@ -161,7 +245,16 @@ def process_fits_list(
             continue
 
         print(f"Processing file {cnt} of {total}: {line}")
-        process_fits_file(client, line, show_hdr=show_hdr, dry_run=dry_run, update_task=update_task)
+        process_fits_file(
+            client,
+            line,
+            show_hdr=show_hdr,
+            dry_run=dry_run,
+            update_task=update_task,
+            projects=projects,
+            project_stats=project_stats,
+            project_tracker=project_tracker,
+        )
         cnt += 1
 
 
@@ -171,6 +264,9 @@ def process_fits_dir(
     show_hdr: bool,
     dry_run: bool,
     update_task: bool = False,
+    projects: Optional[List[Dict[str, Any]]] = None,
+    project_stats: Optional[Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]]] = None,
+    project_tracker: Optional[Dict[str, int]] = None,
 ) -> None:
     """
     Processes all FITS files in specified directory.
@@ -195,18 +291,24 @@ def process_fits_dir(
 
     for f in files:
         print(f"Processing file {cnt} of {total}: {f}")
-        process_fits_file(client, str(f), show_hdr, dry_run=dry_run, update_task=update_task)
+        process_fits_file(
+            client,
+            str(f),
+            show_hdr,
+            dry_run=dry_run,
+            update_task=update_task,
+            projects=projects,
+            project_stats=project_stats,
+            project_tracker=project_tracker,
+        )
         cnt += 1
 
 
-def process_fits_file(
-    client: APIClient,
-    fname,
-    show_hdr: bool,
-    verbose: bool = False,
-    dry_run: bool = False,
-    update_task: bool = False,
-):
+def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool = False,
+                      dry_run: bool = False, update_task: bool = False,
+                      projects: Optional[List[Dict[str, Any]]] = None,
+                      project_stats: Optional[Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]]] = None,
+                      project_tracker: Optional[Dict[str, int]] = None):
     """Processes a FITS file: optional header dump and task lookup via the API."""
 
     key = os.path.basename(fname)
@@ -215,6 +317,7 @@ def process_fits_file(
     h = read_fits(fname)
     filter = _h_str(h, "FILTER")
     object = _h_str(h, "OBJECT")
+    exposure = _h_float(h, "EXPTIME")
 
     task = get_task_by_filename(client, key)
     if task:
@@ -222,6 +325,18 @@ def process_fits_file(
         print(f"  Task found: task_id={tid} imagename={imagename!r} (matched suffix {key!r}), filter={filter}, object={object}")
     else:
         print(f"  No task found for filename suffix {key!r}, filter={filter}, object={object}")
+
+    if projects is not None:
+        project = _find_project_for_filename(key, projects)
+        if project is not None:
+            project_name = _project_name(project)
+            print(f"  Project found: {project_name!r}")
+            if project_stats is not None:
+                _update_project_stats(project_stats, project_name, filter, exposure)
+        else:
+            print("  Project not found")
+            if project_tracker is not None:
+                project_tracker["files_without_project"] = project_tracker.get("files_without_project", 0) + 1
 
     if show_hdr:
         for k in h.keys():
@@ -373,30 +488,65 @@ def sanity_files(cm: ConfigManager, args) -> int:
     if code != 0 or client is None:
         return code
     update_task = bool(getattr(args, "task", False))
+    use_projects = bool(getattr(args, "project", False))
+    projects: Optional[List[Dict[str, Any]]] = None
+    project_stats: Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]] = {}
+    project_tracker: Dict[str, int] = {"files_without_project": 0}
+
+    if use_projects:
+        scope_id = _scope_id_from_config(cm)
+        if scope_id is None:
+            print(
+                "api.scope_id is not set. Run: hevelius-runner telescope list\n"
+                "Then: hevelius-runner telescope set <id_or_name>",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            projects = _fetch_projects_list(client, scope_id)
+        except Exception as e:
+            print(f"Failed to fetch projects list: {e}", file=sys.stderr)
+            return 1
+        print(f"Project processing enabled: loaded {len(projects)} project(s).")
+
+    def _project_kwargs() -> Dict[str, Any]:
+        if not use_projects:
+            return {}
+        return {
+            "projects": projects or [],
+            "project_stats": project_stats,
+            "project_tracker": project_tracker,
+        }
 
     if args.file:
         print(f"Processing single file: {args.file}")
         if update_task:
-            process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True)
+            process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True, **_project_kwargs())
         else:
-            process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run)
+            process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
+        if use_projects:
+            _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
         return 0
 
     if args.list:
         print(f"Processing list of files stored in {args.list}")
         if update_task:
-            process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True)
+            process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True, **_project_kwargs())
         else:
-            process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run)
+            process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
+        if use_projects:
+            _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
         return 0
 
     if args.dir:
         path = args.dir
         print(f"Processing all files in dir: {path}")
         if update_task:
-            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True)
+            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True, **_project_kwargs())
         else:
-            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
+            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
+        if use_projects:
+            _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
         return 0
 
     volumes = _monitor_volumes_from_config(cm)
@@ -415,9 +565,11 @@ def sanity_files(cm: ConfigManager, args) -> int:
     for path, nickname in volumes:
         print(f"Volume '{nickname}': {path}")
         if update_task:
-            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True)
+            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True, **_project_kwargs())
         else:
-            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
+            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
+    if use_projects:
+        _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
     return 0
 
 
