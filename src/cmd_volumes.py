@@ -132,7 +132,13 @@ def _monitor_volumes_from_config(cm: ConfigManager) -> List[Tuple[str, str]]:
 
     return []
 
-def process_fits_list(client: APIClient, fname: str, show_hdr: bool, dry_run: bool, update_task: bool) -> None:
+def process_fits_list(
+    client: APIClient,
+    fname: str,
+    show_hdr: bool,
+    dry_run: bool,
+    update_task: bool = False,
+) -> None:
     """
     Processes all FITS files listed in a specified text file.
 
@@ -159,7 +165,13 @@ def process_fits_list(client: APIClient, fname: str, show_hdr: bool, dry_run: bo
         cnt += 1
 
 
-def process_fits_dir(client: APIClient, dir: str, show_hdr: bool, dry_run: bool, update_task: bool) -> None:
+def process_fits_dir(
+    client: APIClient,
+    dir: str,
+    show_hdr: bool,
+    dry_run: bool,
+    update_task: bool = False,
+) -> None:
     """
     Processes all FITS files in specified directory.
 
@@ -360,21 +372,31 @@ def sanity_files(cm: ConfigManager, args) -> int:
     code, client = _require_api(cm)
     if code != 0 or client is None:
         return code
+    update_task = bool(getattr(args, "task", False))
 
     if args.file:
         print(f"Processing single file: {args.file}")
-        process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, update_task=args.task)
+        if update_task:
+            process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True)
+        else:
+            process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run)
         return 0
 
     if args.list:
         print(f"Processing list of files stored in {args.list}")
-        process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, update_task=args.task)
+        if update_task:
+            process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True)
+        else:
+            process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run)
         return 0
 
     if args.dir:
         path = args.dir
         print(f"Processing all files in dir: {path}")
-        process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=args.task)
+        if update_task:
+            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True)
+        else:
+            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
         return 0
 
     volumes = _monitor_volumes_from_config(cm)
@@ -392,7 +414,10 @@ def sanity_files(cm: ConfigManager, args) -> int:
     print(f"Processing all *.fit/*.fits files across {len(volumes)} configured volume(s).")
     for path, nickname in volumes:
         print(f"Volume '{nickname}': {path}")
-        process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=args.task)
+        if update_task:
+            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True)
+        else:
+            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
     return 0
 
 
