@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from api_client import APIClient, _join_api
 from config_manager import ConfigManager
+from astro import ra_to_sexagesimal, dec_to_sexagesimal
 
 
 def _require_loaded(cm: ConfigManager) -> int:
@@ -120,9 +121,9 @@ def _print_project_list(projects: List[Dict[str, Any]]) -> None:
         ra, dec = _project_radec(project)
         extras = []
         if ra is not None:
-            extras.append(f"ra={ra}")
+            extras.append(f"ra={ra} ({ra_to_sexagesimal(ra)})")
         if dec is not None:
-            extras.append(f"dec={dec}")
+            extras.append(f"dec={dec} ({dec_to_sexagesimal(dec)})")
         extra_s = f" {' '.join(extras)}" if extras else ""
         print(f"project_id={pid}\t{name}{extra_s}")
 
