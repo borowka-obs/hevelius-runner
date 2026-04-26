@@ -46,6 +46,7 @@ from version import get_version
 from cmd_volumes import cmd_volumes
 from cmd_telescope import cmd_telescope_list, cmd_telescope_set
 from cmd_doctor import cmd_doctor
+from cmd_projects import cmd_projects
 
 def setup_logging():
     """Configure logging for the application."""
@@ -353,6 +354,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Numeric scope_id or exact telescope name (see telescope list).",
     )
 
+    projects = sub.add_parser("projects", help="List telescope projects or view a project in detail.")
+    projects_sub = projects.add_subparsers(dest="projects_cmd", metavar="SUBCOMMAND", required=True)
+    projects_sub.add_parser(
+        "list",
+        help="Print projects for configured api.scope_id.",
+    )
+    p_view = projects_sub.add_parser(
+        "view",
+        help="Print all details for a project (including subframes).",
+    )
+    p_view.add_argument("--name", help="Exact project name.")
+    p_view.add_argument("--project-id", type=int, help="Numeric project_id.")
+
     repo_parser = sub.add_parser('volumes', help="Manages files repository (volumes)on local storage.")
     repo_parser.add_argument('-f', "--file", help="Check one specific FITS file", type=str)
     repo_parser.add_argument("-l", "--list", help="Check FITS files listed in a text file (one path per line)", type=str)
@@ -397,6 +411,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_telescope_list(cm)
         if args.telescope_cmd == "set":
             return cmd_telescope_set(cm, args.identifier)
+    if command == "projects":
+        return cmd_projects(cm, args)
     if args.command == "volumes":
         return cmd_volumes(cm, args)  # see cmd_volumes.py
 
