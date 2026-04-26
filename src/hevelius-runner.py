@@ -44,6 +44,28 @@ from script_executor import ScriptExecutor
 from nina_controller import NINAController
 from version import get_version
 from cmd_repo import cmd_repo
+from cmd_telescope import cmd_telescope_list, cmd_telescope_set
+from cmd_doctor import cmd_doctor
+
+def setup_logging():
+    """Configure logging for the application."""
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    # Full logging: format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s - %(message)s',
+        handlers=[
+            RotatingFileHandler(
+                log_dir / 'observatory.log',
+                maxBytes=1024*1024,
+                backupCount=5
+            ),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
 
 class ObservatoryAutomation:
     def __init__(self, config: ConfigManager):
@@ -62,24 +84,6 @@ class ObservatoryAutomation:
         self.current_sequence_path = None
         self.observatory_id = "default"  # Should be configured or determined
 
-    def setup_logging(self):
-        """Configure logging for the application."""
-        log_dir = Path("logs")
-        log_dir.mkdir(exist_ok=True)
-
-        # Full logging: format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(levelname)s - %(message)s',
-            handlers=[
-                RotatingFileHandler(
-                    log_dir / 'observatory.log',
-                    maxBytes=1024*1024,
-                    backupCount=5
-                ),
-                logging.StreamHandler(sys.stdout)
-            ]
-        )
 
     def run(self):
         """Main execution loop of the automation system."""
@@ -261,78 +265,6 @@ def cmd_config(cm: ConfigManager) -> int:
     return 0
 
 
-def cmd_check(cm: ConfigManager) -> int:
-    code = _require_loaded_config(cm)
-    if code != 0:
-        return code
-
-    api_cfg = cm.get_api_config()
-    required_api = ("base_url", "timeout", "username", "password")
-    missing = [k for k in required_api if not str(api_cfg.get(k, "")).strip()]
-    if missing:
-        print(
-            f"API configuration is incomplete (missing: {', '.join(missing)}).",
-            file=sys.stderr,
-        )
-        return 1
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
-    client = APIClient(api_cfg)
-    try:
-        version = client.get_version()
-        print(f"API reachable at {api_cfg['base_url'].rstrip('/')}/ - backend version: {version}")
-    except Exception as e:
-        print(f"API check failed (version endpoint): {e}", file=sys.stderr)
-        return 1
-
-    try:
-        login = client.login()
-        if not login.status or not login.token:
-            print(f"Login failed: {login.msg or 'no JWT token in response'}", file=sys.stderr)
-            return 1
-        print(f"Authenticated as {api_cfg['username']!r} (user id {login.user_id}).")
-    except Exception as e:
-        print(f"API check failed (login): {e}", file=sys.stderr)
-        return 1
-
-    try:
-        scopes = client.list_telescopes()
-        print(f"Telescopes available: {len(scopes)}")
-        sid = api_cfg.get("scope_id")
-        if sid is not None and str(sid).strip() != "":
-            want = int(sid)
-            ids = {int(t.get("scope_id")) for t in scopes if t.get("scope_id") is not None}
-            if want not in ids:
-                print(
-                    f"Configured api.scope_id={want} is not in the telescope list from the API.",
-                    file=sys.stderr,
-                )
-                return 1
-            names = [t.get("name") for t in scopes if int(t.get("scope_id", -1)) == want]
-            label = names[0] if names else "?"
-            print(f"Configured scope_id {want} OK ({label!r}).")
-        else:
-            print(
-                "Note: api.scope_id is not set; use `telescope list` and `telescope set`.",
-                file=sys.stderr,
-            )
-    except Exception as e:
-        print(f"API check failed (telescope list): {e}", file=sys.stderr)
-        return 1
-
-    nina_cfg = cm.get_nina_config()
-    exe = nina_cfg.get("executable_path", "")
-    nina_path = Path(str(exe)) if exe else None
-    if not nina_path or not nina_path.is_file():
-        print(
-            f"NINA executable not found or not configured: {exe!r}",
-            file=sys.stderr,
-        )
-        return 1
-    print(f"NINA executable found: {nina_path}")
-
-    print("Configuration and connectivity check passed.")
-    return 0
 
 
 def cmd_run(cm: ConfigManager) -> int:
@@ -340,8 +272,8 @@ def cmd_run(cm: ConfigManager) -> int:
     if code != 0:
         return code
     api = cm.get_api_config()
-    sid = api.get("scope_id")
-    if sid is None or str(sid).strip() == "":
+    scope_id = api.get("scope_id")
+    if scope_id is None or str(scope_id).strip() == "":
         print(
             "api.scope_id is not set. Run: hevelius-runner telescope list\n"
             "Then: hevelius-runner telescope set <id_or_name>",
@@ -367,7 +299,6 @@ def cmd_version(args: argparse.Namespace, cm: ConfigManager) -> int:
     if not str(api.get("base_url", "")).strip():
         print("api.base_url is missing; cannot query backend version.", file=sys.stderr)
         return 1
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(message)s")
     merged = {
         **api,
         "username": api.get("username") or "_",
@@ -381,67 +312,6 @@ def cmd_version(args: argparse.Namespace, cm: ConfigManager) -> int:
     except Exception as e:
         print(f"Could not reach API version endpoint: {e}", file=sys.stderr)
         return 1
-    return 0
-
-
-def cmd_telescope_list(cm: ConfigManager) -> int:
-    code = _require_loaded_config(cm)
-    if code != 0:
-        return code
-    api_cfg = cm.get_api_config()
-    required = ("base_url", "timeout", "username", "password")
-    missing = [k for k in required if not str(api_cfg.get(k, "")).strip()]
-    if missing:
-        print(f"API configuration incomplete (missing: {', '.join(missing)}).", file=sys.stderr)
-        return 1
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
-    client = APIClient(api_cfg)
-    try:
-        client.get_version()
-        client.login()
-        scopes = client.list_telescopes()
-    except Exception as e:
-        print(f"Failed to list telescopes: {e}", file=sys.stderr)
-        return 1
-    if not scopes:
-        print("No telescopes returned by the API.")
-        return 0
-    for t in scopes:
-        sid = t.get("scope_id")
-        name = t.get("name") or ""
-        print(f"scope_id={sid}\t{name}")
-    return 0
-
-
-def cmd_telescope_set(cm: ConfigManager, identifier: str) -> int:
-    code = _require_loaded_config(cm)
-    if code != 0:
-        return code
-    api_cfg = cm.get_api_config()
-    required = ("base_url", "timeout", "username", "password")
-    missing = [k for k in required if not str(api_cfg.get(k, "")).strip()]
-    if missing:
-        print(f"API configuration incomplete (missing: {', '.join(missing)}).", file=sys.stderr)
-        return 1
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
-    client = APIClient(api_cfg)
-    try:
-        client.get_version()
-        client.login()
-        scope_id, matched_name = resolve_scope_id_from_identifier(client, identifier)
-    except ValueError as e:
-        print(str(e), file=sys.stderr)
-        return 1
-    except Exception as e:
-        print(f"Failed to resolve telescope: {e}", file=sys.stderr)
-        return 1
-    try:
-        cm.write_api_scope_id(scope_id)
-    except RuntimeError as e:
-        print(str(e), file=sys.stderr)
-        return 1
-    extra = f" ({matched_name!r})" if matched_name else ""
-    print(f"Wrote api.scope_id = {scope_id}{extra} to {cm.config_path}")
     return 0
 
 
@@ -459,8 +329,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("run", help="Start the automation loop.")
     sub.add_parser("config", help="Print effective configuration (password redacted).")
     sub.add_parser(
-        "check",
-        help="Verify YAML config, API reachability, JWT login, telescopes, and NINA executable path.",
+        "doctor",
+        help="Diagnoses if the setup is right (verify YAML config, API reachability, JWT login, telescopes, and NINA executable path...)",
     )
     version_parser = sub.add_parser("version", help="Print hevelius-runner version.")
     version_parser.add_argument(
@@ -498,6 +368,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 def main(argv: Optional[List[str]] = None) -> int:
+
+
+    #logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+    setup_logging()
+
     parser = build_parser()
     args = parser.parse_args(argv)
     command = args.command
@@ -512,8 +387,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_run(cm)
     if command == "config":
         return cmd_config(cm)
-    if command == "check":
-        return cmd_check(cm)
+    if command == "doctor":
+        return cmd_doctor(cm, api_client_factory=APIClient)
     if command == "version":
         return cmd_version(args, cm)
     if command == "telescope":
