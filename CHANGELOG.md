@@ -12,6 +12,9 @@
 - Unit tests for config, CLI, login parsing, scope resolution, and URL helpers
 - `check` command renamed to `doctor`
 - `repo` command renamed to `volumes`
+- the 'volumes` command can now scan files in multiple modes: file (-f, or --file), file-list (-l, or --list),
+  directory (-d, or --dir) or all volumes (--sanity-files)
+
 
 0.0.1
 
