@@ -121,9 +121,17 @@ def _print_project_list(projects: List[Dict[str, Any]]) -> None:
         ra, dec = _project_radec(project)
         extras = []
         if ra is not None:
-            extras.append(f"ra={ra} ({ra_to_sexagesimal(ra)})")
+            try:
+                ra_sx = ra_to_sexagesimal(float(ra))
+                extras.append(f"ra={ra} ({ra_sx})")
+            except (TypeError, ValueError):
+                extras.append(f"ra={ra}")
         if dec is not None:
-            extras.append(f"dec={dec} ({dec_to_sexagesimal(dec)})")
+            try:
+                dec_sx = dec_to_sexagesimal(float(dec))
+                extras.append(f"dec={dec} ({dec_sx})")
+            except (TypeError, ValueError):
+                extras.append(f"dec={dec}")
         extra_s = f" {' '.join(extras)}" if extras else ""
         print(f"project_id={pid}\t{name}{extra_s}")
 

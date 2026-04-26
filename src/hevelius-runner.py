@@ -374,6 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     repo_parser.add_argument("-s", "--show-header", help="Displays all entries in FITS header for each file", action='store_true')
     repo_parser.add_argument("-t", "--dry-run", help="Don't do the actual DB upsert", action='store_true')
     repo_parser.add_argument("--task", help="Enable API task add/update while scanning files", action='store_true')
+    repo_parser.add_argument("--project", help="Enable project assignment/statistics while scanning files", action='store_true')
     repo_parser.add_argument("-a", "--all-files", help="Check files against tasks; defaults to scanning all configured paths.volumes when no --file/--list/--dir is given", action='store_true')
     repo_parser.add_argument("--sanity-db", help="Goes through the list of tasks in a database and checks if all files are present", action='store_true')
     repo_parser.add_argument("--min-task-id", help="Minimum task ID to check (for sanity-db)", type=int)
