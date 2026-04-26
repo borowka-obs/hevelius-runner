@@ -13,7 +13,7 @@ sys.path.append(".")
 from hevelius.cmd_basic import db_version, hevelius_version, config_show, backup
 from hevelius.cmd_stats import stats, histogram_show, groups
 from hevelius.cmd_db_migrate import migrate
-from hevelius.cmd_repo import repo
+from hevelius.cmd_volumes import repo
 from hevelius.cmd_catalog import catalog, format_get
 
 
@@ -91,7 +91,7 @@ def run():
         return parser.print_help()
     if args.command == "config":
         return config_show()  # see cmd_basic.py
-    if args.command == "repo":
+    if args.command == "volumes":
         return repo(args)  # see cmd_repo.py
     if args.command == "version":
         return version()

@@ -473,12 +473,8 @@ def sanity_db(cm: ConfigManager, args) -> int:
     return 0
 
 
-def cmd_repo(cm: ConfigManager, args) -> int:
+def cmd_volumes(cm: ConfigManager, args) -> int:
     """Manages the on disk images repository."""
-
-    code = _require_loaded(cm)
-    if code != 0:
-        return code
 
     if args.sanity_files:
         return sanity_files(cm, args)
