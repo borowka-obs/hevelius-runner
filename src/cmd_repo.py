@@ -194,33 +194,51 @@ def process_fits_dir(client: APIClient, dir: str, show_hdr: bool, dry_run: bool)
         cnt += 1
 
 
+def process_fits_file(client: APIClient, fname, show_hdr: bool, verbose: bool = False, dry_run: bool = False):
+    """Processes a FITS file: optional header dump and task lookup via the API."""
+
+    key = os.path.basename(fname)
+
+    # Extract file parameters from the header
+    h = read_fits(fname)
+    filter = gets(h, 'FILTER')
+    object = gets(h, 'OBJECT')
+
+    task = get_task_by_filename(client, key)
+    if task:
+        tid, imagename = task
+        print(f"  Task found: task_id={tid} imagename={imagename!r} (matched suffix {key!r}), filter={filter}, object={object}")
+    else:
+        print(f"  No task found for filename suffix {key!r}, filter={filter}, object={object}")
+
+    if show_hdr:
+        for k in h.keys():
+            print(f"    {k}: {h[k]}")
+
+    # OK, so we have a file on disk and there might or might not be a task for it.
+    # TODO: add ability to insert new or update existing task.
+
+    if dry_run:
+        print(f"  Task {task[0]} or creation update skipped (--dry-run).")
+        return
+
+    if task:
+        task_update(client, fname, task[0], verbose=verbose, dry_run=dry_run)
+    else:
+        task_add(client, fname)
+
+
 def task_add(client: APIClient, fname):
     """Adds a new task based on a image filename, specified by fname. The
        filename parsing is already done by parse_iteleskop_name() and stored in
        details dict."""
 
+    # TODO: implement this, use the API.
 
 
-def process_fits_file(client: APIClient, fname, verbose=False, show_hdr=False, dry_run=False):
-    """Processes a FITS file: optional header dump and task lookup via the API."""
-    key = os.path.basename(fname)
-    task = get_task_by_filename(client, key)
-    if task:
-        tid, imagename = task
-        print(f"  Task found: task_id={tid} imagename={imagename!r} (matched suffix {key!r})")
-    else:
-        print(f"  No task found for filename suffix {key!r}")
+def task_update(client: APIClient, fname: str, task_id: int, verbose=False, dry_run=False):
 
-    if show_hdr:
-        h = read_fits(fname)
-        for k in h.keys():
-            print(f"    {k}: {h[k]}")
-
-    if verbose and task:
-        task_update_params(client, fname, task[0], verbose=verbose, dry_run=dry_run)
-
-
-def task_update_params(client: APIClient, fname: str, task_id: int, verbose=False, dry_run=False):
+    # TODO: rewrite this to use the API.
 
     h = read_fits(fname)
 
@@ -344,7 +362,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
 
     if args.dir:
         path = args.dir
-        print(f"Processing all *.fit files in dir: {path}")
+        print(f"Processing all files in dir: {path}")
         process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run)
         return 0
 
