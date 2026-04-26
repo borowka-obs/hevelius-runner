@@ -140,3 +140,15 @@ scripts: {}
     (tmp_path / "nina.exe").write_bytes(b"")
     ret = runner_mod.main(["-c", str(cfg), "run"])
     assert ret == 1
+
+
+def test_projects_command_dispatches(tmp_path, runner_mod):
+    cfg = tmp_path / "c.yaml"
+    _write_minimal_config(cfg)
+    fake_nina = tmp_path / "nina_fake.exe"
+    fake_nina.write_bytes(b"")
+    with patch.object(runner_mod, "cmd_projects") as mock_projects:
+        mock_projects.return_value = 0
+        ret = runner_mod.main(["-c", str(cfg), "projects", "list"])
+        assert ret == 0
+        mock_projects.assert_called_once()
