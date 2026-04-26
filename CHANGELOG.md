@@ -10,6 +10,7 @@
 - Fixed API URL joining for `task-update` and `task-get`
 - OpenAPI: documented plaintext password for `/api/login`
 - Unit tests for config, CLI, login parsing, scope resolution, and URL helpers
+- `check` command renamed to `doctor`
 
 0.0.1
 
