@@ -43,7 +43,7 @@ from file_monitor import FileMonitor, FileMonitorThread
 from script_executor import ScriptExecutor
 from nina_controller import NINAController
 from version import get_version
-from cmd_repo import cmd_repo
+from cmd_volumes import cmd_volumes
 from cmd_telescope import cmd_telescope_list, cmd_telescope_set
 from cmd_doctor import cmd_doctor
 
@@ -353,11 +353,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Numeric scope_id or exact telescope name (see telescope list).",
     )
 
-    repo_parser = sub.add_parser('repo', help="Manages files repository on local storage.")
+    repo_parser = sub.add_parser('volumes', help="Manages files repository (volumes)on local storage.")
     repo_parser.add_argument('-f', "--file", help="Check one specific FITS file", type=str)
     repo_parser.add_argument("-l", "--list", help="Check FITS files listed in a text file (one path per line)", type=str)
     repo_parser.add_argument("-d", "--dir",   help="Check all FITS files recursively in this specific directory", type=str)
-    repo_parser.add_argument("-s", "--show-header", help="Displays all entries in FITS header", action='store_true')
+    repo_parser.add_argument("-s", "--show-header", help="Displays all entries in FITS header for each file", action='store_true')
     repo_parser.add_argument("-t", "--dry-run", help="Don't do the actual DB upsert", action='store_true')
     repo_parser.add_argument("--sanity-db", help="Goes through the list of tasks in a database and checks if all files are present", action='store_true')
     repo_parser.add_argument("--sanity-files", help="Check files against tasks; defaults to scanning all configured paths.volumes when no --file/--list/--dir is given", action='store_true')
@@ -396,8 +396,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_telescope_list(cm)
         if args.telescope_cmd == "set":
             return cmd_telescope_set(cm, args.identifier)
-    if args.command == "repo":
-        return cmd_repo(cm, args)  # see cmd_repo.py
+    if args.command == "volumes":
+        return cmd_volumes(cm, args)  # see cmd_volumes.py
 
     parser.print_help()
     return 2
