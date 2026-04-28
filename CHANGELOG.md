@@ -14,8 +14,10 @@
 - `repo` command renamed to `volumes`
 - the `volumes` command can now scan files in multiple modes: file (-f, or --file), file-list (-l, or --list),
   directory (-d, or --dir) or all volumes (--sanity-files)
-- the `volumes` command now take optional `--task` argument. If specified, it will insert or update tasks
+- the `volumes` command now take optional `--tasks` argument. If specified, it will insert or update tasks
   for each found file.
+- the `volumes` command now take optional `--projects` argument. If specified, it will try to match files
+  to projects, and then update the projects statistics.
 
 
 0.0.1

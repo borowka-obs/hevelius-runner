@@ -28,7 +28,13 @@ def test_sanity_files_specific_file(monkeypatch):
     cm = _DummyConfigManager()
     calls = []
 
-    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm: (0, object()))
+    require_api_connect = {"value": None}
+
+    def _fake_require_api(_cm, connect=False):
+        require_api_connect["value"] = connect
+        return 0, object()
+
+    monkeypatch.setattr(cmd_volumes, "_require_api", _fake_require_api)
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_file",
@@ -48,7 +54,7 @@ def test_sanity_files_list_file(monkeypatch):
     cm = _DummyConfigManager()
     calls = []
 
-    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm: (0, object()))
+    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm, connect=False: (0, object()))
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_list",
@@ -67,7 +73,7 @@ def test_sanity_files_specific_directory(monkeypatch):
     cm = _DummyConfigManager()
     calls = []
 
-    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm: (0, object()))
+    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm, connect=False: (0, object()))
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_dir",
@@ -88,7 +94,7 @@ def test_sanity_files_defaults_to_all_configured_volumes(monkeypatch):
     calls = []
     volumes = [(r"c:\astro\live", "live"), (r"d:\astro\archive", "archive")]
 
-    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm: (0, object()))
+    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm, connect=False: (0, object()))
     monkeypatch.setattr(cmd_volumes, "_monitor_volumes_from_config", lambda _cm: volumes)
     monkeypatch.setattr(
         cmd_volumes,
@@ -106,7 +112,13 @@ def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caps
     calls = []
     volumes = [(r"c:\astro\live", "live")]
 
-    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm: (0, object()))
+    require_api_connect = {"value": None}
+
+    def _fake_require_api(_cm, connect=False):
+        require_api_connect["value"] = connect
+        return 0, object()
+
+    monkeypatch.setattr(cmd_volumes, "_require_api", _fake_require_api)
     monkeypatch.setattr(cmd_volumes, "_scope_id_from_config", lambda _cm: 3)
     monkeypatch.setattr(cmd_volumes, "_fetch_projects_list", lambda client, scope_id: [{"project_id": 42, "name": "M42", "subframes": []}])
     monkeypatch.setattr(cmd_volumes, "_monitor_volumes_from_config", lambda _cm: volumes)
@@ -123,8 +135,9 @@ def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caps
 
     monkeypatch.setattr(cmd_volumes, "process_fits_dir", _fake_process_dir)
 
-    ret = cmd_volumes.sanity_files(cm, _base_args(project=True))
+    ret = cmd_volumes.sanity_files(cm, _base_args(projects=True))
     assert ret == 0
+    assert require_api_connect["value"] is True
     assert len(calls) == 1
     assert calls[0][0] == r"c:\astro\live"
     assert calls[0][1]["projects"] == [{"project_id": 42, "name": "M42", "subframes": []}]

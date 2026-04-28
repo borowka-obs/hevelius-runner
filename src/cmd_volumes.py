@@ -54,7 +54,7 @@ def _require_loaded(cm: ConfigManager) -> int:
     return 1
 
 
-def _require_api(cm: ConfigManager) -> Tuple[int, Optional[APIClient]]:
+def _require_api(cm: ConfigManager, connect: bool = True) -> Tuple[int, Optional[APIClient]]:
     code = _require_loaded(cm)
     if code != 0:
         return code, None
@@ -66,6 +66,9 @@ def _require_api(cm: ConfigManager) -> Tuple[int, Optional[APIClient]]:
         return 1, None
     logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
     client = APIClient(api_cfg)
+    if not connect:
+        return 0, client
+
     try:
         client.connect()
     except Exception as e:
@@ -616,11 +619,12 @@ def parse_degms(s):
 def sanity_files(cm: ConfigManager, args) -> int:
     """Compare local FITS paths to tasks on the server (via filename suffix match)."""
 
-    code, client = _require_api(cm)
+    update_task = bool(getattr(args, "tasks", False))
+    use_projects = bool(getattr(args, "projects", False))
+
+    code, client = _require_api(cm, connect=update_task or use_projects)
     if code != 0 or client is None:
         return code
-    update_task = bool(getattr(args, "task", False))
-    use_projects = bool(getattr(args, "project", False))
     projects: Optional[List[Dict[str, Any]]] = None
     project_stats: Dict[int, Dict[str, Any]] = {}
     project_tracker: Dict[str, int] = {"files_without_project": 0}
@@ -716,7 +720,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
 def sanity_db(cm: ConfigManager, args) -> int:
     """Compare tasks from the API to files under ``paths.repo-path``."""
 
-    code, client = _require_api(cm)
+    code, client = _require_api(cm, connect=True)
     if code != 0 or client is None:
         return code
 

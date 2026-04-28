@@ -83,6 +83,8 @@ class APIClient:
             config: Dictionary containing 'base_url', 'timeout', 'username', 'password';
                 optional 'verify_ssl', 'scope_id'.
         """
+
+        self.connected = False
         self.base_url = config["base_url"]
         self.timeout = int(config["timeout"])
         self.logger = logging.getLogger(__name__)
@@ -247,6 +249,8 @@ class APIClient:
         ver = self.get_version()
         self.logger.info(f"Backend ({self.base_url}) reachable, returned version is {ver}")
         self.login()
+        self.connected = True
+
 
     def find_tasks_by_filename(self, filename: str) -> Tuple[bool, List[Dict[str, Any]]]:
         """
