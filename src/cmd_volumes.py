@@ -179,18 +179,34 @@ def _find_project_for_filename(filename: str, projects: List[Dict[str, Any]]) ->
 
 
 def _update_project_stats(
-    project_stats: Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]],
-    project_name: str,
+    project_stats: Dict[int, Dict[str, Any]],
+    project: Dict[str, Any],
     filter_name: Optional[str],
     exposure: Optional[float],
 ) -> None:
-    per_project = project_stats.setdefault(project_name, {})
+    project_id = project.get("project_id")
+    if project_id is None:
+        return
+    try:
+        pid = int(project_id)
+    except (TypeError, ValueError):
+        return
+
+    pstats = project_stats.setdefault(
+        pid,
+        {
+            "name": _project_name(project) or f"project-{pid}",
+            "project": project,
+            "buckets": {},
+        },
+    )
+    per_project = pstats["buckets"]
     bucket = (filter_name, exposure)
     per_project[bucket] = per_project.get(bucket, 0) + 1
 
 
 def _print_project_stats(
-    project_stats: Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]],
+    project_stats: Dict[int, Dict[str, Any]],
     files_without_project: int,
 ) -> None:
     print()
@@ -199,9 +215,11 @@ def _print_project_stats(
     if not project_stats:
         print("No project subframes were matched.")
         return
-    for project_name in sorted(project_stats.keys()):
+    for project_id in sorted(project_stats.keys()):
+        entry = project_stats[project_id]
+        project_name = entry.get("name") or f"project-{project_id}"
         print(f"Project: {project_name}")
-        buckets = project_stats[project_name]
+        buckets = entry.get("buckets", {})
         total = sum(buckets.values())
         print(f"  Total matched files: {total}")
         for (filter_name, exposure), count in sorted(
@@ -213,6 +231,129 @@ def _print_project_stats(
         ):
             print(f"  filter={filter_name} exposure={exposure} -> {count}")
 
+
+def _subframe_filter_name(subframe: Dict[str, Any]) -> Optional[str]:
+    filt = subframe.get("filter")
+    if isinstance(filt, dict):
+        short = filt.get("short_name")
+        if short is not None and str(short).strip():
+            return str(short).strip()
+    if filt is not None and str(filt).strip():
+        return str(filt).strip()
+    return None
+
+
+def _match_subframe(
+    subframes: List[Dict[str, Any]],
+    filter_name: str,
+    exposure: float,
+) -> Optional[Dict[str, Any]]:
+    fkey = filter_name.strip().lower()
+    for sf in subframes:
+        sf_filter = _subframe_filter_name(sf)
+        sf_exposure = sf.get("exposure_time")
+        if sf_filter is None or sf_exposure is None:
+            continue
+        try:
+            sf_exp = float(sf_exposure)
+        except (TypeError, ValueError):
+            continue
+        if sf_filter.strip().lower() == fkey and abs(sf_exp - exposure) < 1e-6:
+            return sf
+    return None
+
+
+def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Dict[str, Any]]) -> bool:
+    ok = True
+    for project_id in sorted(project_stats.keys()):
+        entry = project_stats[project_id]
+        project_name = entry.get("name") or f"project-{project_id}"
+        project = entry.get("project") or {}
+        subframes = project.get("subframes") if isinstance(project, dict) else None
+        if not isinstance(subframes, list):
+            subframes = []
+
+        for (filter_name, exposure), count in entry.get("buckets", {}).items():
+            if filter_name is None or exposure is None:
+                print(
+                    f"Skipping subframe sync for project {project_name!r}: "
+                    f"incomplete bucket filter={filter_name} exposure={exposure}",
+                    file=sys.stderr,
+                )
+                ok = False
+                continue
+            try:
+                exposure_f = float(exposure)
+            except (TypeError, ValueError):
+                print(
+                    f"Skipping subframe sync for project {project_name!r}: "
+                    f"invalid exposure {exposure!r}",
+                    file=sys.stderr,
+                )
+                ok = False
+                continue
+
+            matched = _match_subframe(subframes, str(filter_name), exposure_f)
+            if matched is None:
+                url = f"{client.base_url.rstrip('/')}/projects/{project_id}/subframes"
+                payload = {
+                    "filter": str(filter_name),
+                    "exposure_time": exposure_f,
+                    "count": int(count),
+                    "goal_count": int(count),
+                }
+                try:
+                    resp = client.session.post(
+                        url,
+                        json=payload,
+                        timeout=client.timeout,
+                        headers=client._get_auth_headers(),
+                    )
+                    resp.raise_for_status()
+                    print(
+                        f"Synced project {project_name!r}: created subframe "
+                        f"filter={filter_name} exposure={exposure_f} count={count} goal_count={count}"
+                    )
+                except Exception as e:
+                    print(
+                        f"Failed creating subframe for project {project_name!r} "
+                        f"(filter={filter_name}, exposure={exposure_f}): {e}",
+                        file=sys.stderr,
+                    )
+                    ok = False
+                continue
+
+            subframe_id = matched.get("id")
+            if subframe_id is None:
+                print(
+                    f"Failed updating subframe for project {project_name!r}: matched subframe has no id.",
+                    file=sys.stderr,
+                )
+                ok = False
+                continue
+
+            url = f"{client.base_url.rstrip('/')}/projects/{project_id}/subframes/{subframe_id}"
+            payload = {"count": int(count)}
+            try:
+                resp = client.session.patch(
+                    url,
+                    json=payload,
+                    timeout=client.timeout,
+                    headers=client._get_auth_headers(),
+                )
+                resp.raise_for_status()
+                print(
+                    f"Synced project {project_name!r}: updated subframe_id={subframe_id} "
+                    f"filter={filter_name} exposure={exposure_f} count={count}"
+                )
+            except Exception as e:
+                print(
+                    f"Failed updating subframe {subframe_id} for project {project_name!r}: {e}",
+                    file=sys.stderr,
+                )
+                ok = False
+    return ok
+
 def process_fits_list(
     client: APIClient,
     fname: str,
@@ -220,7 +361,7 @@ def process_fits_list(
     dry_run: bool,
     update_task: bool = False,
     projects: Optional[List[Dict[str, Any]]] = None,
-    project_stats: Optional[Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]]] = None,
+    project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
     project_tracker: Optional[Dict[str, int]] = None,
 ) -> None:
     """
@@ -265,7 +406,7 @@ def process_fits_dir(
     dry_run: bool,
     update_task: bool = False,
     projects: Optional[List[Dict[str, Any]]] = None,
-    project_stats: Optional[Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]]] = None,
+    project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
     project_tracker: Optional[Dict[str, int]] = None,
 ) -> None:
     """
@@ -307,7 +448,7 @@ def process_fits_dir(
 def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool = False,
                       dry_run: bool = False, update_task: bool = False,
                       projects: Optional[List[Dict[str, Any]]] = None,
-                      project_stats: Optional[Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]]] = None,
+                      project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
                       project_tracker: Optional[Dict[str, int]] = None):
     """Processes a FITS file: optional header dump and task lookup via the API."""
 
@@ -332,7 +473,7 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
             project_name = _project_name(project)
             print(f"  Project found: {project_name!r}")
             if project_stats is not None:
-                _update_project_stats(project_stats, project_name, filter, exposure)
+                _update_project_stats(project_stats, project, filter, exposure)
         else:
             print("  Project not found")
             if project_tracker is not None:
@@ -490,7 +631,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
     update_task = bool(getattr(args, "task", False))
     use_projects = bool(getattr(args, "project", False))
     projects: Optional[List[Dict[str, Any]]] = None
-    project_stats: Dict[str, Dict[Tuple[Optional[str], Optional[float]], int]] = {}
+    project_stats: Dict[int, Dict[str, Any]] = {}
     project_tracker: Dict[str, int] = {"files_without_project": 0}
 
     if use_projects:
@@ -526,6 +667,8 @@ def sanity_files(cm: ConfigManager, args) -> int:
             process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
         if use_projects:
             _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
+            if not _sync_project_stats_to_server(client, project_stats):
+                return 1
         return 0
 
     if args.list:
@@ -536,6 +679,8 @@ def sanity_files(cm: ConfigManager, args) -> int:
             process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
         if use_projects:
             _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
+            if not _sync_project_stats_to_server(client, project_stats):
+                return 1
         return 0
 
     if args.dir:
@@ -547,6 +692,8 @@ def sanity_files(cm: ConfigManager, args) -> int:
             process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
         if use_projects:
             _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
+            if not _sync_project_stats_to_server(client, project_stats):
+                return 1
         return 0
 
     volumes = _monitor_volumes_from_config(cm)
@@ -570,6 +717,8 @@ def sanity_files(cm: ConfigManager, args) -> int:
             process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
     if use_projects:
         _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
+        if not _sync_project_stats_to_server(client, project_stats):
+            return 1
     return 0
 
 

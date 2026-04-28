@@ -110,12 +110,17 @@ def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caps
 
     monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm: (0, object()))
     monkeypatch.setattr(cmd_volumes, "_scope_id_from_config", lambda _cm: 3)
-    monkeypatch.setattr(cmd_volumes, "_fetch_projects_list", lambda client, scope_id: [{"name": "M42"}])
+    monkeypatch.setattr(cmd_volumes, "_fetch_projects_list", lambda client, scope_id: [{"project_id": 42, "name": "M42", "subframes": []}])
     monkeypatch.setattr(cmd_volumes, "_monitor_volumes_from_config", lambda _cm: volumes)
+    monkeypatch.setattr(cmd_volumes, "_sync_project_stats_to_server", lambda client, stats: True)
 
     def _fake_process_dir(client, path, show_hdr=False, dry_run=False, **kwargs):
         calls.append((path, kwargs))
-        kwargs["project_stats"]["M42"] = {("Ha", 300.0): 2}
+        kwargs["project_stats"][42] = {
+            "name": "M42",
+            "project": {"project_id": 42, "name": "M42", "subframes": []},
+            "buckets": {("Ha", 300.0): 2},
+        }
         kwargs["project_tracker"]["files_without_project"] = 1
 
     monkeypatch.setattr(cmd_volumes, "process_fits_dir", _fake_process_dir)
@@ -124,7 +129,7 @@ def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caps
     assert ret == 0
     assert len(calls) == 1
     assert calls[0][0] == r"c:\astro\live"
-    assert calls[0][1]["projects"] == [{"name": "M42"}]
+    assert calls[0][1]["projects"] == [{"project_id": 42, "name": "M42", "subframes": []}]
     out = capsys.readouterr().out
     assert "PROJECT STATISTICS" in out
     assert "Project: M42" in out
@@ -141,13 +146,13 @@ def test_process_fits_file_project_found_updates_stats(monkeypatch, capsys):
         client=object(),
         fname=r"c:\repo\M42_001.fits",
         show_hdr=False,
-        projects=[{"name": "M42"}],
+        projects=[{"project_id": 42, "name": "M42", "subframes": []}],
         project_stats=project_stats,
         project_tracker=tracker,
     )
     out = capsys.readouterr().out
     assert "Project found: 'M42'" in out
-    assert project_stats["M42"][("Ha", 300.0)] == 1
+    assert project_stats[42]["buckets"][("Ha", 300.0)] == 1
     assert tracker["files_without_project"] == 0
 
 
@@ -169,3 +174,84 @@ def test_process_fits_file_project_not_found_tracks_counter(monkeypatch, capsys)
     assert "Project not found" in out
     assert project_stats == {}
     assert tracker["files_without_project"] == 1
+
+
+class _FakeResponse:
+    def raise_for_status(self):
+        return None
+
+
+class _FakeSession:
+    def __init__(self):
+        self.post_calls = []
+        self.patch_calls = []
+
+    def post(self, url, json=None, timeout=None, headers=None):
+        self.post_calls.append((url, json, timeout, headers))
+        return _FakeResponse()
+
+    def patch(self, url, json=None, timeout=None, headers=None):
+        self.patch_calls.append((url, json, timeout, headers))
+        return _FakeResponse()
+
+
+def test_sync_project_stats_creates_missing_subframe():
+    session = _FakeSession()
+    client = type(
+        "C",
+        (),
+        {
+            "base_url": "https://example.test/api/",
+            "timeout": 5,
+            "session": session,
+            "_get_auth_headers": lambda self: {"Authorization": "Bearer x"},
+        },
+    )()
+    stats = {
+        42: {
+            "name": "M42",
+            "project": {"project_id": 42, "name": "M42", "subframes": []},
+            "buckets": {("Ha", 300.0): 3},
+        }
+    }
+    ok = cmd_volumes._sync_project_stats_to_server(client, stats)
+    assert ok is True
+    assert len(session.post_calls) == 1
+    assert session.post_calls[0][0].endswith("/projects/42/subframes")
+    assert session.post_calls[0][1]["filter"] == "Ha"
+    assert session.post_calls[0][1]["count"] == 3
+    assert session.post_calls[0][1]["goal_count"] == 3
+    assert session.patch_calls == []
+
+
+def test_sync_project_stats_updates_existing_subframe_count_only():
+    session = _FakeSession()
+    client = type(
+        "C",
+        (),
+        {
+            "base_url": "https://example.test/api/",
+            "timeout": 5,
+            "session": session,
+            "_get_auth_headers": lambda self: {"Authorization": "Bearer x"},
+        },
+    )()
+    stats = {
+        42: {
+            "name": "M42",
+            "project": {
+                "project_id": 42,
+                "name": "M42",
+                "subframes": [
+                    {"id": 77, "filter": {"short_name": "Ha"}, "exposure_time": 300.0, "count": 1, "goal_count": 10}
+                ],
+            },
+            "buckets": {("Ha", 300.0): 5},
+        }
+    }
+    ok = cmd_volumes._sync_project_stats_to_server(client, stats)
+    assert ok is True
+    assert session.post_calls == []
+    assert len(session.patch_calls) == 1
+    assert session.patch_calls[0][0].endswith("/projects/42/subframes/77")
+    assert session.patch_calls[0][1] == {"count": 5}
