@@ -24,102 +24,17 @@ It is a very early work in progress.
 - NINA (Nighttime Imaging 'N' Astronomy) software
 - Windows operating system
 
-## Installation
+## Documentation
 
-0. TLS certificates
+For Installation, see [doc/install.md](doc/install.md).
 
-If you experience any certificate issues during cloning a repo on windows, you might try the following:
+For Usage, see [doc/usage.md](doc/usage.md).
 
-```
-git config --global http.sslbackend schannel
-```
+For trouble shooting, see [doc/troubleshooting.md](doc/troubleshooting.md).
 
-This will configure the Windows built-in certificate store. For details, see
-https://stackoverflow.com/questions/23885449/unable-to-resolve-unable-to-get-local-issuer-certificate-using-git-on-windows
-
-2. Clone the repository:
+For development details, see [doc/devel.md](doc/devel.md).
 
 
-```bash
-git clone https://github.com/borowka-obs/hevelius-runner.git
-cd hevelius-runner
-```
-
-2. Create and activate virtual environment:
-
-```
-python -m venv venv
-venv\Scripts\Activate
-```
-
-3. Install required packages:
-
-bash
-pip install -r requirements.txt
-
-## Configuration
-
-1. Copy `config/config.yaml.example` to `config/config.yaml`
-2. Update the configuration with your settings:
-   - API credentials and base URL
-   - Directory paths
-   - NINA executable location
-   - Custom script paths
-
-## Usage
-
-Global options (such as `-c` / `--config`) must come **before** the subcommand.
-
-If you run the program with **no subcommand**, usage and the list of commands are printed.
-
-Run the automation loop:
-
-```bash
-python src/hevelius-runner.py run
-```
-
-Print effective configuration (password redacted):
-
-```bash
-python src/hevelius-runner.py -c config/config.yaml config
-```
-
-Verify configuration, API reachability, login, and NINA executable path:
-
-```bash
-python src/hevelius-runner.py check
-```
-
-The `run` command will:
-1. Load configuration
-2. Execute startup scripts
-3. Monitor for nighttime
-4. Retrieve and execute observation tasks
-5. Update task status upon completion
-
-## Directory Structure
-
-```
-hevelius-runner/
-├── config/
-│   ├── config.yaml
-│   └── templates/
-│       └── sequence_template.json
-├── src/
-│   ├── main.py
-│   ├── config_manager.py
-│   ├── api_client.py
-│   ├── task_manager.py
-│   ├── file_monitor.py
-│   ├── script_executor.py
-│   └── nina_controller.py
-├── scripts/
-│   ├── startup_script.py
-│   ├── night_start.py
-│   ├── night_end.py
-│   └── post_task.py
-└── requirements.txt
-```
 
 ## Generating a template advanced sequence file
 
@@ -138,4 +53,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 - NINA (Nighttime Imaging 'N' Astronomy) software
-
