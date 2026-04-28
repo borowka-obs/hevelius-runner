@@ -16,9 +16,8 @@ def _base_args(**overrides):
         list=None,
         dir=None,
         show_header=False,
-        dry_run=False,
-        task=False,
-        project=False,
+        tasks=False,
+        projects=False,
     )
     for key, value in overrides.items():
         setattr(args, key, value)
@@ -33,8 +32,8 @@ def test_sanity_files_specific_file(monkeypatch):
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_file",
-        lambda client, fname, show_hdr=False, dry_run=False: calls.append(
-            (client, fname, show_hdr, dry_run)
+        lambda client, fname, show_hdr=False, update_task=False: calls.append(
+            (client, fname, show_hdr, update_task)
         ),
     )
 
@@ -53,16 +52,15 @@ def test_sanity_files_list_file(monkeypatch):
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_list",
-        lambda client, fname, show_hdr=False, dry_run=False: calls.append(
-            (client, fname, show_hdr, dry_run)
+        lambda client, fname, show_hdr=False: calls.append(
+            (client, fname, show_hdr)
         ),
     )
 
-    ret = cmd_volumes.sanity_files(cm, _base_args(list=r"c:\tmp\fits_list.txt", dry_run=True))
+    ret = cmd_volumes.sanity_files(cm, _base_args(list=r"c:\tmp\fits_list.txt"))
     assert ret == 0
     assert len(calls) == 1
     assert calls[0][1] == r"c:\tmp\fits_list.txt"
-    assert calls[0][3] is True
 
 
 def test_sanity_files_specific_directory(monkeypatch):
@@ -73,8 +71,8 @@ def test_sanity_files_specific_directory(monkeypatch):
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_dir",
-        lambda client, path, show_hdr=False, dry_run=False: calls.append(
-            (client, path, show_hdr, dry_run)
+        lambda client, path, show_hdr=False: calls.append(
+            (client, path, show_hdr)
         ),
     )
 
@@ -95,7 +93,7 @@ def test_sanity_files_defaults_to_all_configured_volumes(monkeypatch):
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_dir",
-        lambda client, path, show_hdr=False, dry_run=False: calls.append(path),
+        lambda client, path, show_hdr=False: calls.append(path),
     )
 
     ret = cmd_volumes.sanity_files(cm, _base_args())
@@ -114,7 +112,7 @@ def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caps
     monkeypatch.setattr(cmd_volumes, "_monitor_volumes_from_config", lambda _cm: volumes)
     monkeypatch.setattr(cmd_volumes, "_sync_project_stats_to_server", lambda client, stats: True)
 
-    def _fake_process_dir(client, path, show_hdr=False, dry_run=False, **kwargs):
+    def _fake_process_dir(client, path, show_hdr=False, **kwargs):
         calls.append((path, kwargs))
         kwargs["project_stats"][42] = {
             "name": "M42",
