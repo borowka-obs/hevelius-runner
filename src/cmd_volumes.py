@@ -211,10 +211,14 @@ def _update_project_stats(
 def _print_project_stats(
     project_stats: Dict[int, Dict[str, Any]],
     files_without_project: int,
+    files_without_project_names: Optional[List[str]] = None,
 ) -> None:
     print()
     print("=== PROJECT STATISTICS ===")
     print(f"Files without project match: {files_without_project}")
+    if files_without_project_names:
+        for name in files_without_project_names:
+            print(f"  {name}")
     if not project_stats:
         print("No project subframes were matched.")
         return
@@ -446,7 +450,7 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
                       update_task: bool = False,
                       projects: Optional[List[Dict[str, Any]]] = None,
                       project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
-                      project_tracker: Optional[Dict[str, int]] = None):
+                      project_tracker: Optional[Dict[str, Any]] = None):
     """Processes a FITS file: optional header dump and task lookup via the API."""
 
     key = os.path.basename(fname)
@@ -476,6 +480,9 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
             print("  Project not found")
             if project_tracker is not None:
                 project_tracker["files_without_project"] = project_tracker.get("files_without_project", 0) + 1
+                files_without_project_names = project_tracker.get("files_without_project_names")
+                if isinstance(files_without_project_names, list):
+                    files_without_project_names.append(key)
 
     if show_hdr:
         for k in h.keys():
@@ -621,13 +628,20 @@ def sanity_files(cm: ConfigManager, args) -> int:
 
     update_task = bool(getattr(args, "tasks", False))
     use_projects = bool(getattr(args, "projects", False))
+    collect_orphans = bool(getattr(args, "orphans", False))
+    if collect_orphans and not use_projects:
+        print("--orphans requires --projects.", file=sys.stderr)
+        return 1
 
     code, client = _require_api(cm, connect=update_task or use_projects)
     if code != 0 or client is None:
         return code
     projects: Optional[List[Dict[str, Any]]] = None
     project_stats: Dict[int, Dict[str, Any]] = {}
-    project_tracker: Dict[str, int] = {"files_without_project": 0}
+    project_tracker: Dict[str, Any] = {
+        "files_without_project": 0,
+        "files_without_project_names": [] if collect_orphans else None,
+    }
 
     if use_projects:
         scope_id = _scope_id_from_config(cm)
@@ -661,7 +675,11 @@ def sanity_files(cm: ConfigManager, args) -> int:
         else:
             process_fits_file(client, args.file, show_hdr=args.show_header, **_project_kwargs())
         if use_projects:
-            _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
+            _print_project_stats(
+                project_stats,
+                project_tracker.get("files_without_project", 0),
+                project_tracker.get("files_without_project_names"),
+            )
             if not _sync_project_stats_to_server(client, project_stats):
                 return 1
         return 0
@@ -673,7 +691,11 @@ def sanity_files(cm: ConfigManager, args) -> int:
         else:
             process_fits_list(client, args.list, show_hdr=args.show_header, **_project_kwargs())
         if use_projects:
-            _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
+            _print_project_stats(
+                project_stats,
+                project_tracker.get("files_without_project", 0),
+                project_tracker.get("files_without_project_names"),
+            )
             if not _sync_project_stats_to_server(client, project_stats):
                 return 1
         return 0
@@ -686,7 +708,11 @@ def sanity_files(cm: ConfigManager, args) -> int:
         else:
             process_fits_dir(client, path, show_hdr=args.show_header, **_project_kwargs())
         if use_projects:
-            _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
+            _print_project_stats(
+                project_stats,
+                project_tracker.get("files_without_project", 0),
+                project_tracker.get("files_without_project_names"),
+            )
             if not _sync_project_stats_to_server(client, project_stats):
                 return 1
         return 0
@@ -711,7 +737,11 @@ def sanity_files(cm: ConfigManager, args) -> int:
         else:
             process_fits_dir(client, path, show_hdr=args.show_header, **_project_kwargs())
     if use_projects:
-        _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
+        _print_project_stats(
+            project_stats,
+            project_tracker.get("files_without_project", 0),
+            project_tracker.get("files_without_project_names"),
+        )
         if not _sync_project_stats_to_server(client, project_stats):
             return 1
     return 0

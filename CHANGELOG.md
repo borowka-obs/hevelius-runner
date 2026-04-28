@@ -18,7 +18,8 @@
   for each found file.
 - the `volumes` command now take optional `--projects` argument. If specified, it will try to match files
   to projects, and then update the projects statistics.
-
+- the `volumes` command now have optional `--orphans` argument. If specified, it will list all files
+  there it was unable to match to any project.
 
 0.0.1
 
