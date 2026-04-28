@@ -358,7 +358,6 @@ def process_fits_list(
     client: APIClient,
     fname: str,
     show_hdr: bool,
-    dry_run: bool,
     update_task: bool = False,
     projects: Optional[List[Dict[str, Any]]] = None,
     project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
@@ -369,7 +368,6 @@ def process_fits_list(
 
     :param fname: name of a text file that contains a list of files to be loaded
     :param show_hdr: bool governing whether FITS headers will be printed or not
-    :param dry_run: bool governing if DB changes are to be done or not.
     """
 
     with open(fname, encoding="utf-8") as f:
@@ -390,7 +388,6 @@ def process_fits_list(
             client,
             line,
             show_hdr=show_hdr,
-            dry_run=dry_run,
             update_task=update_task,
             projects=projects,
             project_stats=project_stats,
@@ -403,7 +400,6 @@ def process_fits_dir(
     client: APIClient,
     dir: str,
     show_hdr: bool,
-    dry_run: bool,
     update_task: bool = False,
     projects: Optional[List[Dict[str, Any]]] = None,
     project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
@@ -414,7 +410,6 @@ def process_fits_dir(
 
     :param dir: directory to be traversed
     :param show_hdr: bool governing whether FITS headers will be printed or not
-    :param dry_run: bool governing if DB changes are to be done or not.
     """
 
     base = os.path.normpath(dir)
@@ -436,7 +431,6 @@ def process_fits_dir(
             client,
             str(f),
             show_hdr,
-            dry_run=dry_run,
             update_task=update_task,
             projects=projects,
             project_stats=project_stats,
@@ -446,7 +440,7 @@ def process_fits_dir(
 
 
 def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool = False,
-                      dry_run: bool = False, update_task: bool = False,
+                      update_task: bool = False,
                       projects: Optional[List[Dict[str, Any]]] = None,
                       project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
                       project_tracker: Optional[Dict[str, int]] = None):
@@ -460,12 +454,13 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
     object = _h_str(h, "OBJECT")
     exposure = _h_float(h, "EXPTIME")
 
-    task = get_task_by_filename(client, key)
-    if task:
-        tid, imagename = task
-        print(f"  Task found: task_id={tid} imagename={imagename!r} (matched suffix {key!r}), filter={filter}, object={object}")
-    else:
-        print(f"  No task found for filename suffix {key!r}, filter={filter}, object={object}")
+    if update_task:
+        task = get_task_by_filename(client, key)
+        if task:
+            tid, imagename = task
+            print(f"  Task found: task_id={tid} imagename={imagename!r} (matched suffix {key!r}), filter={filter}, object={object}")
+        else:
+            print(f"  No task found for filename suffix {key!r}, filter={filter}, object={object}")
 
     if projects is not None:
         project = _find_project_for_filename(key, projects)
@@ -486,18 +481,14 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
     # OK, so we have a file on disk and there might or might not be a task for it.
     # TODO: add ability to insert new or update existing task.
 
-    if not update_task:
+    if update_task:
+        if task:
+            task_update(client, fname, task[0], verbose=verbose)
+        else:
+            task_add(client, fname, verbose=verbose)
+    else:
         print("  Task DB update skipped (pass --task to enable API upsert).")
         return
-
-    if dry_run:
-        print("  Task DB update skipped (--dry-run).")
-        return
-
-    if task:
-        task_update(client, fname, task[0], verbose=verbose)
-        return
-    task_add(client, fname, verbose=verbose)
 
 
 def _h_str(h, key: str) -> Optional[str]:
@@ -662,9 +653,9 @@ def sanity_files(cm: ConfigManager, args) -> int:
     if args.file:
         print(f"Processing single file: {args.file}")
         if update_task:
-            process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True, **_project_kwargs())
+            process_fits_file(client, args.file, show_hdr=args.show_header, update_task=True, **_project_kwargs())
         else:
-            process_fits_file(client, args.file, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
+            process_fits_file(client, args.file, show_hdr=args.show_header, **_project_kwargs())
         if use_projects:
             _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
             if not _sync_project_stats_to_server(client, project_stats):
@@ -674,9 +665,9 @@ def sanity_files(cm: ConfigManager, args) -> int:
     if args.list:
         print(f"Processing list of files stored in {args.list}")
         if update_task:
-            process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True, **_project_kwargs())
+            process_fits_list(client, args.list, show_hdr=args.show_header, update_task=True, **_project_kwargs())
         else:
-            process_fits_list(client, args.list, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
+            process_fits_list(client, args.list, show_hdr=args.show_header, **_project_kwargs())
         if use_projects:
             _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
             if not _sync_project_stats_to_server(client, project_stats):
@@ -687,9 +678,9 @@ def sanity_files(cm: ConfigManager, args) -> int:
         path = args.dir
         print(f"Processing all files in dir: {path}")
         if update_task:
-            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True, **_project_kwargs())
+            process_fits_dir(client, path, show_hdr=args.show_header, update_task=True, **_project_kwargs())
         else:
-            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
+            process_fits_dir(client, path, show_hdr=args.show_header, **_project_kwargs())
         if use_projects:
             _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
             if not _sync_project_stats_to_server(client, project_stats):
@@ -712,9 +703,9 @@ def sanity_files(cm: ConfigManager, args) -> int:
     for path, nickname in volumes:
         print(f"Volume '{nickname}': {path}")
         if update_task:
-            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, update_task=True, **_project_kwargs())
+            process_fits_dir(client, path, show_hdr=args.show_header, update_task=True, **_project_kwargs())
         else:
-            process_fits_dir(client, path, show_hdr=args.show_header, dry_run=args.dry_run, **_project_kwargs())
+            process_fits_dir(client, path, show_hdr=args.show_header, **_project_kwargs())
     if use_projects:
         _print_project_stats(project_stats, project_tracker.get("files_without_project", 0))
         if not _sync_project_stats_to_server(client, project_stats):
