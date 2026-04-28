@@ -1,6 +1,6 @@
 # Hevelius Runner Changelog
 
-0.2.0 (unreleased)
+0.2.0 (2026-04-28)
 
 - YAML configuration with `run`, `config`, and `doctor` subcommands; redacted `config` output
 - Added `version` command; optional `--backend` queries the Hevelius API `/version` endpoint
@@ -21,6 +21,6 @@
 - the `volumes` command now have optional `--orphans` argument. If specified, it will list all files
   there it was unable to match to any project.
 
-0.0.1
+0.0.1 (never released)
 
 - Initial automation prototype (INI config, NINA integration, API client)
