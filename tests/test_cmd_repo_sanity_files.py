@@ -273,7 +273,8 @@ def test_sync_project_stats_creates_missing_subframe():
     assert session.post_calls[0][0].endswith("/projects/42/subframes")
     assert session.post_calls[0][1]["filter"] == "Ha"
     assert session.post_calls[0][1]["count"] == 3
-    assert session.post_calls[0][1]["goal_count"] == 3
+    assert "goal_count" not in session.post_calls[0][1]
+    assert "active" not in session.post_calls[0][1]
     assert session.patch_calls == []
 
 
