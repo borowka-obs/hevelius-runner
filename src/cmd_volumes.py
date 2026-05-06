@@ -367,7 +367,6 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
                     "filter": str(filter_name),
                     "exposure_time": exposure_f,
                     "count": int(count),
-                    "goal_count": int(count),
                 }
                 try:
                     resp = client.session.post(
@@ -379,12 +378,14 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
                     resp.raise_for_status()
                     print(
                         f"Synced project {project_name!r}: created subframe "
-                        f"filter={filter_name} exposure={exposure_f} count={count} goal_count={count}"
+                        f"filter={filter_name} exposure={exposure_f} count={count}"
                     )
                 except Exception as e:
                     print(
                         f"Failed creating subframe for project {project_name!r} "
-                        f"(filter={filter_name}, exposure={exposure_f}): {e}",
+                        f"(filter={filter_name}, exposure={exposure_f}): {e}. "
+                        "Backend note: allow creating project subframes with "
+                        "filter, exposure_time, and count only (without goal_count/active).",
                         file=sys.stderr,
                     )
                     ok = False
