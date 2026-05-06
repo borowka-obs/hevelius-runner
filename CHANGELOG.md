@@ -1,5 +1,9 @@
 # Hevelius Runner Changelog
 
+0.3.0 (unreleased)
+
+- Exclude patterns - specified files or directories can be excluded from the volumes handling.
+
 0.2.0 (2026-04-28)
 
 - YAML configuration with `run`, `config`, and `doctor` subcommands; redacted `config` output
