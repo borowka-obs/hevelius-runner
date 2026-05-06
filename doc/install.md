@@ -14,6 +14,8 @@ This software requires Python. Once python is installed, get the sources into a 
 
 To check if it works, you can run `python src/hevelius-runner.py doctor`.
 
+Optionally, you can run bin/install-hevelius.ps1. This should create a hevelius runner
+shortcut in the start menu.
 
 # Running hevelius-runner
 
@@ -23,3 +25,7 @@ To check if it works, you can run `python src/hevelius-runner.py doctor`.
 3. venv\Scripts\activate
 4. python src/hevelius-runner.py <commands>
 ```
+
+or
+
+click on the hevelius runner if you ran the install-hevelius script.
