@@ -29,3 +29,18 @@ shortcut in the start menu.
 or
 
 click on the hevelius runner if you ran the install-hevelius script.
+
+# Excluding files from volumes scan
+
+`hevelius-runner volumes` can skip files based on full-path patterns from
+`config/config.yaml`:
+
+```yaml
+paths:
+  exclude_patterns:
+    - '*FLAT*'
+    - '*shit*'
+```
+
+If a discovered file path matches any pattern, that file is ignored completely
+and is not processed (no header read, no task/project updates).

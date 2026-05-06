@@ -12,6 +12,11 @@ paths:
   repo-path: data/repo
   template_dir: templates
   output_dir: output
+  # Optional full-path exclusion patterns for volumes/list/file scans.
+  # If a file's full path matches any pattern, it is ignored completely.
+  exclude_patterns:
+    - '*FLAT*'
+    - '*shit*'
   # One or more FITS watch locations; each volume can define an optional nickname.
   volumes:
     - path: 'C:\astro\fits-live'

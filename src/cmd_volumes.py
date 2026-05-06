@@ -5,6 +5,7 @@ import glob
 import logging
 import os
 import sys
+import fnmatch
 from typing import Any, Dict, List, Optional, Tuple
 
 from fits import (
@@ -135,6 +136,65 @@ def _monitor_volumes_from_config(cm: ConfigManager) -> List[Tuple[str, str]]:
         return [(p, "default")]
 
     return []
+
+
+def _exclude_patterns_from_config(cm: ConfigManager) -> List[str]:
+    """
+    Return path exclusion patterns from config.
+
+    Reads ``paths.exclude_patterns`` and supports both a single string and list
+    of strings. Patterns are matched against normalized full file paths.
+    """
+    paths = cm.get_paths_config()
+    raw = paths.get("exclude_patterns")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        pattern = raw.strip()
+        return [pattern] if pattern else []
+    if isinstance(raw, list):
+        out: List[str] = []
+        for idx, item in enumerate(raw):
+            if item is None:
+                continue
+            if not isinstance(item, str):
+                print(
+                    f"paths.exclude_patterns[{idx}] must be a string pattern.",
+                    file=sys.stderr,
+                )
+                continue
+            p = item.strip()
+            if p:
+                out.append(p)
+        return out
+    print("paths.exclude_patterns must be a string or list of strings.", file=sys.stderr)
+    return []
+
+
+def _normalize_full_path(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
+def _is_excluded(full_path: str, exclude_patterns: List[str]) -> bool:
+    """
+    True if the normalized full path matches any exclusion pattern.
+
+    Matching rules:
+    - fnmatch against normalized full path
+    - plain substring fallback against normalized full path
+    """
+    if not exclude_patterns:
+        return False
+    normalized = _normalize_full_path(full_path)
+    for pattern in exclude_patterns:
+        candidate = os.path.normcase(pattern.strip())
+        if not candidate:
+            continue
+        if fnmatch.fnmatch(normalized, candidate):
+            return True
+        if candidate in normalized:
+            return True
+    return False
 
 
 def _scope_id_from_config(cm: ConfigManager) -> Optional[int]:
@@ -369,6 +429,7 @@ def process_fits_list(
     projects: Optional[List[Dict[str, Any]]] = None,
     project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
     project_tracker: Optional[Dict[str, int]] = None,
+    exclude_patterns: Optional[List[str]] = None,
 ) -> None:
     """
     Processes all FITS files listed in a specified text file.
@@ -390,10 +451,16 @@ def process_fits_list(
             # Skip empty and commented out lines
             continue
 
-        print(f"Processing file {cnt} of {total}: {line}")
+        full_path = _normalize_full_path(line)
+        if _is_excluded(full_path, exclude_patterns or []):
+            print(f"Ignoring file {cnt} of {total} (excluded): {full_path}")
+            cnt += 1
+            continue
+
+        print(f"Processing file {cnt} of {total}: {full_path}")
         process_fits_file(
             client,
-            line,
+            full_path,
             show_hdr=show_hdr,
             update_task=update_task,
             projects=projects,
@@ -411,6 +478,7 @@ def process_fits_dir(
     projects: Optional[List[Dict[str, Any]]] = None,
     project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
     project_tracker: Optional[Dict[str, int]] = None,
+    exclude_patterns: Optional[List[str]] = None,
 ) -> None:
     """
     Processes all FITS files in specified directory.
@@ -433,10 +501,16 @@ def process_fits_dir(
     total = len(files)
 
     for f in files:
-        print(f"Processing file {cnt} of {total}: {f}")
+        full_path = _normalize_full_path(str(f))
+        if _is_excluded(full_path, exclude_patterns or []):
+            print(f"Ignoring file {cnt} of {total} (excluded): {full_path}")
+            cnt += 1
+            continue
+
+        print(f"Processing file {cnt} of {total}: {full_path}")
         process_fits_file(
             client,
-            str(f),
+            full_path,
             show_hdr,
             update_task=update_task,
             projects=projects,
@@ -629,6 +703,9 @@ def sanity_files(cm: ConfigManager, args) -> int:
     update_task = bool(getattr(args, "tasks", False))
     use_projects = bool(getattr(args, "projects", False))
     collect_orphans = bool(getattr(args, "orphans", False))
+    exclude_patterns = _exclude_patterns_from_config(cm)
+    if exclude_patterns:
+        print(f"Exclude patterns enabled ({len(exclude_patterns)}): {exclude_patterns}")
     if collect_orphans and not use_projects:
         print("--orphans requires --projects.", file=sys.stderr)
         return 1
@@ -669,11 +746,15 @@ def sanity_files(cm: ConfigManager, args) -> int:
         }
 
     if args.file:
-        print(f"Processing single file: {args.file}")
+        full_path = _normalize_full_path(args.file)
+        if _is_excluded(full_path, exclude_patterns):
+            print(f"Ignoring single file (excluded): {full_path}")
+            return 0
+        print(f"Processing single file: {full_path}")
         if update_task:
-            process_fits_file(client, args.file, show_hdr=args.show_header, update_task=True, **_project_kwargs())
+            process_fits_file(client, full_path, show_hdr=args.show_header, update_task=True, **_project_kwargs())
         else:
-            process_fits_file(client, args.file, show_hdr=args.show_header, **_project_kwargs())
+            process_fits_file(client, full_path, show_hdr=args.show_header, **_project_kwargs())
         if use_projects:
             _print_project_stats(
                 project_stats,
@@ -687,9 +768,22 @@ def sanity_files(cm: ConfigManager, args) -> int:
     if args.list:
         print(f"Processing list of files stored in {args.list}")
         if update_task:
-            process_fits_list(client, args.list, show_hdr=args.show_header, update_task=True, **_project_kwargs())
+            process_fits_list(
+                client,
+                args.list,
+                show_hdr=args.show_header,
+                update_task=True,
+                exclude_patterns=exclude_patterns,
+                **_project_kwargs(),
+            )
         else:
-            process_fits_list(client, args.list, show_hdr=args.show_header, **_project_kwargs())
+            process_fits_list(
+                client,
+                args.list,
+                show_hdr=args.show_header,
+                exclude_patterns=exclude_patterns,
+                **_project_kwargs(),
+            )
         if use_projects:
             _print_project_stats(
                 project_stats,
@@ -704,9 +798,22 @@ def sanity_files(cm: ConfigManager, args) -> int:
         path = args.dir
         print(f"Processing all files in dir: {path}")
         if update_task:
-            process_fits_dir(client, path, show_hdr=args.show_header, update_task=True, **_project_kwargs())
+            process_fits_dir(
+                client,
+                path,
+                show_hdr=args.show_header,
+                update_task=True,
+                exclude_patterns=exclude_patterns,
+                **_project_kwargs(),
+            )
         else:
-            process_fits_dir(client, path, show_hdr=args.show_header, **_project_kwargs())
+            process_fits_dir(
+                client,
+                path,
+                show_hdr=args.show_header,
+                exclude_patterns=exclude_patterns,
+                **_project_kwargs(),
+            )
         if use_projects:
             _print_project_stats(
                 project_stats,
@@ -733,9 +840,22 @@ def sanity_files(cm: ConfigManager, args) -> int:
     for path, nickname in volumes:
         print(f"Volume '{nickname}': {path}")
         if update_task:
-            process_fits_dir(client, path, show_hdr=args.show_header, update_task=True, **_project_kwargs())
+            process_fits_dir(
+                client,
+                path,
+                show_hdr=args.show_header,
+                update_task=True,
+                exclude_patterns=exclude_patterns,
+                **_project_kwargs(),
+            )
         else:
-            process_fits_dir(client, path, show_hdr=args.show_header, **_project_kwargs())
+            process_fits_dir(
+                client,
+                path,
+                show_hdr=args.show_header,
+                exclude_patterns=exclude_patterns,
+                **_project_kwargs(),
+            )
     if use_projects:
         _print_project_stats(
             project_stats,

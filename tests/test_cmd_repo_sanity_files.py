@@ -1,4 +1,5 @@
 from argparse import Namespace
+import builtins
 
 import cmd_volumes
 
@@ -58,8 +59,8 @@ def test_sanity_files_list_file(monkeypatch):
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_list",
-        lambda client, fname, show_hdr=False: calls.append(
-            (client, fname, show_hdr)
+        lambda client, fname, show_hdr=False, **kwargs: calls.append(
+            (client, fname, show_hdr, kwargs)
         ),
     )
 
@@ -77,8 +78,8 @@ def test_sanity_files_specific_directory(monkeypatch):
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_dir",
-        lambda client, path, show_hdr=False: calls.append(
-            (client, path, show_hdr)
+        lambda client, path, show_hdr=False, **kwargs: calls.append(
+            (client, path, show_hdr, kwargs)
         ),
     )
 
@@ -99,12 +100,53 @@ def test_sanity_files_defaults_to_all_configured_volumes(monkeypatch):
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_dir",
-        lambda client, path, show_hdr=False: calls.append(path),
+        lambda client, path, show_hdr=False, **kwargs: calls.append(path),
     )
 
     ret = cmd_volumes.sanity_files(cm, _base_args())
     assert ret == 0
     assert calls == [r"c:\astro\live", r"d:\astro\archive"]
+
+
+def test_process_fits_list_skips_excluded_full_path(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        cmd_volumes,
+        "process_fits_file",
+        lambda client, fname, show_hdr=False, update_task=False, **kwargs: calls.append(fname),
+    )
+
+    listed = [
+        r"C:\astro\night\good_001.fits",
+        r"C:\astro\night\FLAT_001.fits",
+        r"C:\astro\night\also_shit_001.fits",
+    ]
+
+    def _fake_open(*args, **kwargs):
+        class _F:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                return False
+
+            def readlines(self_inner):
+                return [f"{line}\n" for line in listed]
+
+        return _F()
+
+    monkeypatch.setattr(builtins, "open", _fake_open)
+
+    cmd_volumes.process_fits_list(
+        client=object(),
+        fname="ignored.txt",
+        show_hdr=False,
+        exclude_patterns=["*FLAT*", "*shit*"],
+    )
+
+    assert len(calls) == 1
+    assert calls[0].lower().endswith(r"good_001.fits")
 
 
 def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, capsys):
