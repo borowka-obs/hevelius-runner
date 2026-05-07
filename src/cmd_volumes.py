@@ -18,6 +18,40 @@ from cmd_projects import _get_projects_from_endpoint
 from config_manager import ConfigManager
 
 
+# ---- Color helpers --------------------------------------------------------
+# ANSI escape codes are emitted only when stdout is a real TTY; when output is
+# piped to a file or a non-tty terminal, colors collapse to empty strings to
+# avoid littering logs with control sequences.
+
+_GREEN = "\033[92m"
+_YELLOW = "\033[93m"
+_RED = "\033[91m"
+# Orange is a 256-color extension; falls back gracefully on terminals that do
+# not understand the sequence (most modern terminals do).
+_ORANGE = "\033[38;5;208m"
+_DIM = "\033[2m"
+_RESET = "\033[0m"
+
+
+def _supports_color() -> bool:
+    """True if stdout looks like an interactive terminal that supports ANSI.
+
+    Honors the NO_COLOR convention (https://no-color.org/). Re-evaluated on
+    every call so tests that capture stdout (which is not a TTY) see plain
+    ASCII output without depending on import-time state.
+    """
+    if os.environ.get("NO_COLOR"):
+        return False
+    stream = sys.stdout
+    return hasattr(stream, "isatty") and stream.isatty()
+
+
+def _color(code: str, text: str) -> str:
+    if not code or not _supports_color():
+        return text
+    return f"{code}{text}{_RESET}"
+
+
 def get_tasks_files_list(client: APIClient) -> List[Tuple[int, Optional[str]]]:
     """
     Return every task as ``(task_id, imagename)`` from the API (JWT required).
@@ -273,6 +307,9 @@ def _print_project_stats(
     files_without_project: int,
     files_without_project_names: Optional[List[str]] = None,
 ) -> None:
+    """Print the orphan-files header. Per-bucket details (with color and the
+    add/update/skip action) are printed by :func:`_sync_project_stats_to_server`,
+    which is the only code path that knows the action that was actually taken."""
     print()
     print("=== PROJECT STATISTICS ===")
     print(f"Files without project match: {files_without_project}")
@@ -281,22 +318,6 @@ def _print_project_stats(
             print(f"  {name}")
     if not project_stats:
         print("No project subframes were matched.")
-        return
-    for project_id in sorted(project_stats.keys()):
-        entry = project_stats[project_id]
-        project_name = entry.get("name") or f"project-{project_id}"
-        print(f"Project: {project_name}")
-        buckets = entry.get("buckets", {})
-        total = sum(buckets.values())
-        print(f"  Total matched files: {total}")
-        for (filter_name, exposure), count in sorted(
-            buckets.items(),
-            key=lambda item: (
-                "" if item[0][0] is None else str(item[0][0]),
-                -1.0 if item[0][1] is None else float(item[0][1]),
-            ),
-        ):
-            print(f"  filter={filter_name} exposure={exposure} -> {count}")
 
 
 def _subframe_filter_name(subframe: Dict[str, Any]) -> Optional[str]:
@@ -330,22 +351,158 @@ def _match_subframe(
     return None
 
 
+def _fetch_project_fresh(client: APIClient, project_id: int) -> Optional[Dict[str, Any]]:
+    """GET /api/projects/{id} just before sync so we compare against current
+    server state (count/goal_count may have moved while we were scanning).
+
+    Returns the project dict on success, or None when the call fails (the caller
+    falls back to the cached project data from the initial list fetch)."""
+    try:
+        url = f"{client.base_url.rstrip('/')}/projects/{int(project_id)}"
+        resp = client.session.get(
+            url,
+            timeout=client.timeout,
+            headers=client._get_auth_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict):
+            project = data.get("project")
+            if isinstance(project, dict):
+                return project
+    except Exception:
+        return None
+    return None
+
+
+def _bucket_action_color(action: str, count: int, goal_count: Optional[int]) -> str:
+    """Pick a color for a per-bucket sync result line.
+
+    skipped (no change)            -> orange
+    added/updated, count <  goal   -> yellow
+    added/updated, count >= goal   -> green
+    failed                         -> red
+    """
+    if action == "skipped":
+        return _ORANGE
+    if action == "failed":
+        return _RED
+    if goal_count is None or goal_count <= 0:
+        return _GREEN
+    return _GREEN if count >= goal_count else _YELLOW
+
+
+def _sync_one_bucket(
+    client: APIClient,
+    project_id: int,
+    project_name: str,
+    matched: Optional[Dict[str, Any]],
+    filter_name: str,
+    exposure_f: float,
+    count: int,
+) -> Tuple[str, Optional[int], Optional[str]]:
+    """Sync a single (filter, exposure, count) bucket.
+
+    Returns ``(action, goal_count, error)``:
+      - action: ``added``, ``updated``, ``skipped``, or ``failed``
+      - goal_count: server-side goal_count when known (used for color logic)
+      - error: optional error message when action is ``failed``
+    """
+    if matched is None:
+        url = f"{client.base_url.rstrip('/')}/projects/{project_id}/subframes"
+        payload = {
+            "filter": str(filter_name),
+            "exposure_time": exposure_f,
+            "count": int(count),
+        }
+        try:
+            resp = client.session.post(
+                url, json=payload, timeout=client.timeout,
+                headers=client._get_auth_headers(),
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            return "failed", None, f"creating subframe failed: {e}"
+        return "added", None, None
+
+    subframe_id = matched.get("id")
+    if subframe_id is None:
+        return "failed", None, "matched subframe has no id"
+
+    matched_count = matched.get("count")
+    goal_count = matched.get("goal_count")
+    try:
+        goal_count_int = int(goal_count) if goal_count is not None else None
+    except (TypeError, ValueError):
+        goal_count_int = None
+
+    # Skip when the captured count on the server already matches what we'd
+    # send. This avoids spurious last_updated bumps and keeps logs clean for
+    # incremental rescans of the same volume.
+    try:
+        if matched_count is not None and int(matched_count) == int(count):
+            return "skipped", goal_count_int, None
+    except (TypeError, ValueError):
+        pass
+
+    url = f"{client.base_url.rstrip('/')}/projects/{project_id}/subframes/{subframe_id}"
+    payload = {"count": int(count)}
+    try:
+        resp = client.session.patch(
+            url, json=payload, timeout=client.timeout,
+            headers=client._get_auth_headers(),
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        return "failed", goal_count_int, f"updating subframe {subframe_id} failed: {e}"
+    return "updated", goal_count_int, None
+
+
 def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Dict[str, Any]]) -> bool:
+    """Sync collected per-project subframe counts to the server.
+
+    For each project, the runner first re-fetches the project (so comparisons
+    against ``count``/``goal_count`` use fresh data), then for every bucket:
+
+    * creates a new subframe if no matching (filter, exposure_time) row exists;
+    * sends a PATCH with only ``count`` if the server count differs;
+    * skips the call entirely when the server count already matches.
+
+    Each per-bucket result is printed on a single color-coded line.
+    """
     ok = True
+    if not project_stats:
+        return ok
+
     for project_id in sorted(project_stats.keys()):
         entry = project_stats[project_id]
         project_name = entry.get("name") or f"project-{project_id}"
-        project = entry.get("project") or {}
-        subframes = project.get("subframes") if isinstance(project, dict) else None
+
+        # Fetch fresh server state for this project; fall back to the cached
+        # copy from the initial listing if the GET fails.
+        fresh = _fetch_project_fresh(client, project_id)
+        if fresh is None:
+            fresh = entry.get("project") or {}
+        subframes = fresh.get("subframes") if isinstance(fresh, dict) else None
         if not isinstance(subframes, list):
             subframes = []
 
-        for (filter_name, exposure), count in entry.get("buckets", {}).items():
+        print(f"Project: {project_name}")
+        buckets = entry.get("buckets", {})
+        total_files = sum(buckets.values())
+        print(f"  Total matched files: {total_files}")
+
+        for (filter_name, exposure), count in sorted(
+            buckets.items(),
+            key=lambda item: (
+                "" if item[0][0] is None else str(item[0][0]),
+                -1.0 if item[0][1] is None else float(item[0][1]),
+            ),
+        ):
             if filter_name is None or exposure is None:
                 print(
-                    f"Skipping subframe sync for project {project_name!r}: "
-                    f"incomplete bucket filter={filter_name} exposure={exposure}",
-                    file=sys.stderr,
+                    f"  {_color(_RED, '[failed   ]')} incomplete bucket "
+                    f"filter={filter_name} exposure={exposure} count={count}"
                 )
                 ok = False
                 continue
@@ -353,73 +510,31 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
                 exposure_f = float(exposure)
             except (TypeError, ValueError):
                 print(
-                    f"Skipping subframe sync for project {project_name!r}: "
-                    f"invalid exposure {exposure!r}",
-                    file=sys.stderr,
+                    f"  {_color(_RED, '[failed   ]')} invalid exposure "
+                    f"filter={filter_name} exposure={exposure!r} count={count}"
                 )
                 ok = False
                 continue
 
             matched = _match_subframe(subframes, str(filter_name), exposure_f)
-            if matched is None:
-                url = f"{client.base_url.rstrip('/')}/projects/{project_id}/subframes"
-                payload = {
-                    "filter": str(filter_name),
-                    "exposure_time": exposure_f,
-                    "count": int(count),
-                }
-                try:
-                    resp = client.session.post(
-                        url,
-                        json=payload,
-                        timeout=client.timeout,
-                        headers=client._get_auth_headers(),
-                    )
-                    resp.raise_for_status()
-                    print(
-                        f"Synced project {project_name!r}: created subframe "
-                        f"filter={filter_name} exposure={exposure_f} count={count}"
-                    )
-                except Exception as e:
-                    print(
-                        f"Failed creating subframe for project {project_name!r} "
-                        f"(filter={filter_name}, exposure={exposure_f}): {e}. "
-                        "Backend note: allow creating project subframes with "
-                        "filter, exposure_time, and count only (without goal_count/active).",
-                        file=sys.stderr,
-                    )
-                    ok = False
-                continue
-
-            subframe_id = matched.get("id")
-            if subframe_id is None:
-                print(
-                    f"Failed updating subframe for project {project_name!r}: matched subframe has no id.",
-                    file=sys.stderr,
-                )
+            action, goal_count, error = _sync_one_bucket(
+                client, project_id, project_name, matched,
+                str(filter_name), exposure_f, int(count),
+            )
+            if action == "failed":
                 ok = False
-                continue
 
-            url = f"{client.base_url.rstrip('/')}/projects/{project_id}/subframes/{subframe_id}"
-            payload = {"count": int(count)}
-            try:
-                resp = client.session.patch(
-                    url,
-                    json=payload,
-                    timeout=client.timeout,
-                    headers=client._get_auth_headers(),
-                )
-                resp.raise_for_status()
-                print(
-                    f"Synced project {project_name!r}: updated subframe_id={subframe_id} "
-                    f"filter={filter_name} exposure={exposure_f} count={count}"
-                )
-            except Exception as e:
-                print(
-                    f"Failed updating subframe {subframe_id} for project {project_name!r}: {e}",
-                    file=sys.stderr,
-                )
-                ok = False
+            color = _bucket_action_color(action, int(count), goal_count)
+            tag = f"[{action:<9}]"
+            line = (
+                f"  {tag} filter={filter_name} exposure={exposure_f} "
+                f"count={count}"
+            )
+            if goal_count is not None:
+                line += f" goal_count={goal_count}"
+            if error:
+                line += f"  ({error})"
+            print(_color(color, line))
     return ok
 
 def process_fits_list(
@@ -449,16 +564,17 @@ def process_fits_list(
     for line in lines:
         line = line.strip()
         if len(line) == 0 or line[0] == "#":
-            # Skip empty and commented out lines
+            # Skip empty and commented out lines (do not bump the counter so
+            # the user-visible "n of total" tracks file rows, not blank ones).
             continue
 
         full_path = _normalize_full_path(line)
         if _is_excluded(full_path, exclude_patterns or []):
-            print(f"Ignoring file {cnt} of {total} (excluded): {full_path}")
+            progress = _format_progress(cnt, total)
+            print(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
             cnt += 1
             continue
 
-        print(f"Processing file {cnt} of {total}: {full_path}")
         process_fits_file(
             client,
             full_path,
@@ -467,6 +583,8 @@ def process_fits_list(
             projects=projects,
             project_stats=project_stats,
             project_tracker=project_tracker,
+            idx=cnt,
+            total=total,
         )
         cnt += 1
 
@@ -491,7 +609,6 @@ def process_fits_dir(
     base = os.path.normpath(dir)
     pattern_fit = os.path.join(base, "**", "*.fit")
     pattern_fits = os.path.join(base, "**", "*.fits")
-    print(f"patterns={pattern_fit!r}, {pattern_fits!r}")
     found_fit = glob.glob(pattern_fit, recursive=True)
     found_fits = glob.glob(pattern_fits, recursive=True)
     files = sorted(set(found_fit) | set(found_fits))
@@ -504,11 +621,11 @@ def process_fits_dir(
     for f in files:
         full_path = _normalize_full_path(str(f))
         if _is_excluded(full_path, exclude_patterns or []):
-            print(f"Ignoring file {cnt} of {total} (excluded): {full_path}")
+            progress = _format_progress(cnt, total)
+            print(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
             cnt += 1
             continue
 
-        print(f"Processing file {cnt} of {total}: {full_path}")
         process_fits_file(
             client,
             full_path,
@@ -517,16 +634,65 @@ def process_fits_dir(
             projects=projects,
             project_stats=project_stats,
             project_tracker=project_tracker,
+            idx=cnt,
+            total=total,
         )
         cnt += 1
+
+
+def _format_progress(idx: Optional[int], total: Optional[int]) -> str:
+    """Render the per-file progress prefix (e.g. ``[ 12/345]``) or empty string."""
+    if idx is None or total is None or total <= 0:
+        return ""
+    width = max(1, len(str(total)))
+    return f"[{idx:>{width}}/{total}] "
+
+
+def _format_status_tag(status: str) -> str:
+    """
+    Render a fixed-width, color-coded status tag for compact per-file logging.
+
+    matched   -> green   (file matched a project)
+    unmatched -> red     (no project matched)
+    skipped   -> yellow  (file was excluded or otherwise not processed)
+    """
+    label = f"{status:<9}"
+    if status == "matched":
+        return f"[{_color(_GREEN, label)}]"
+    if status == "unmatched":
+        return f"[{_color(_RED, label)}]"
+    if status == "skipped":
+        return f"[{_color(_YELLOW, label)}]"
+    return f"[{label}]"
+
+
+def _format_file_params(filter_name: Optional[str], exposure: Optional[float],
+                        object_name: Optional[str]) -> str:
+    """Render ``filter=… exposure=… object=…`` skipping fields that are None."""
+    parts = []
+    if filter_name is not None:
+        parts.append(f"filter={filter_name}")
+    if exposure is not None:
+        parts.append(f"exposure={exposure}")
+    if object_name is not None:
+        parts.append(f"object={object_name}")
+    return " ".join(parts)
 
 
 def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool = False,
                       update_task: bool = False,
                       projects: Optional[List[Dict[str, Any]]] = None,
                       project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
-                      project_tracker: Optional[Dict[str, Any]] = None):
-    """Processes a FITS file: optional header dump and task lookup via the API."""
+                      project_tracker: Optional[Dict[str, Any]] = None,
+                      idx: Optional[int] = None,
+                      total: Optional[int] = None):
+    """Processes a FITS file: optional header dump and task lookup via the API.
+
+    Emits a single status line per file with a color-coded tag:
+    ``matched`` (green), ``unmatched`` (red), or ``skipped`` (yellow). The
+    ``idx``/``total`` parameters are optional and only used to render the
+    progress prefix when called from a batch processor.
+    """
 
     key = os.path.basename(fname)
 
@@ -536,44 +702,59 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
     object = _h_str(h, "OBJECT")
     exposure = _h_float(h, "EXPTIME")
 
+    task = None
     if update_task:
         task = get_task_by_filename(client, key)
-        if task:
-            tid, imagename = task
-            print(f"  Task found: task_id={tid} imagename={imagename!r} (matched suffix {key!r}), filter={filter}, object={object}")
-        else:
-            print(f"  No task found for filename suffix {key!r}, filter={filter}, object={object}")
 
+    project = None
     if projects is not None:
         project = _find_project_for_filename(key, projects)
         if project is not None:
-            project_name = _project_name(project)
-            print(f"  Project found: {project_name!r}")
             if project_stats is not None:
                 _update_project_stats(project_stats, project, filter, exposure)
         else:
-            print("  Project not found")
             if project_tracker is not None:
                 project_tracker["files_without_project"] = project_tracker.get("files_without_project", 0) + 1
                 files_without_project_names = project_tracker.get("files_without_project_names")
                 if isinstance(files_without_project_names, list):
                     files_without_project_names.append(key)
 
+    # Build the compact one-line summary for this file.
+    if projects is not None:
+        if project is not None:
+            status = "matched"
+        else:
+            status = "unmatched"
+    else:
+        # Without --projects, fall back to the task status if available,
+        # otherwise mark as matched (we still have a file on disk).
+        status = "matched" if (not update_task or task) else "unmatched"
+
+    extras: List[str] = []
+    if project is not None:
+        extras.append(f"project={_project_name(project)!r}")
+    if update_task:
+        if task:
+            extras.append(f"task_id={task[0]}")
+        else:
+            extras.append("task=none")
+
+    params = _format_file_params(filter, exposure, object)
+    progress = _format_progress(idx, total)
+    tag = _format_status_tag(status)
+    extras_s = ("  " + " ".join(extras)) if extras else ""
+    params_s = ("  " + params) if params else ""
+    print(f"{progress}{tag} {fname}{params_s}{extras_s}")
+
     if show_hdr:
         for k in h.keys():
             print(f"    {k}: {h[k]}")
-
-    # OK, so we have a file on disk and there might or might not be a task for it.
-    # TODO: add ability to insert new or update existing task.
 
     if update_task:
         if task:
             task_update(client, fname, task[0], verbose=verbose)
         else:
             task_add(client, fname, verbose=verbose)
-    else:
-        print("  Task DB update skipped (pass --task to enable API upsert).")
-        return
 
 
 def _h_str(h, key: str) -> Optional[str]:
