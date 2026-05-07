@@ -185,8 +185,10 @@ def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caps
     assert calls[0][1]["projects"] == [{"project_id": 42, "name": "M42", "subframes": []}]
     out = capsys.readouterr().out
     assert "PROJECT STATISTICS" in out
-    assert "Project: M42" in out
-    assert "filter=Ha exposure=300.0 -> 2" in out
+    assert "Files without project match: 1" in out
+    # Per-project bucket lines are emitted by _sync_project_stats_to_server
+    # which is mocked away in this test, so we only assert the orphan-files
+    # header section here.
 
 
 def test_process_fits_file_project_found_updates_stats(monkeypatch, capsys):
@@ -204,7 +206,9 @@ def test_process_fits_file_project_found_updates_stats(monkeypatch, capsys):
         project_tracker=tracker,
     )
     out = capsys.readouterr().out
-    assert "Project found: 'M42'" in out
+    assert "[matched" in out
+    assert "project='M42'" in out
+    assert "M42_001.fits" in out
     assert project_stats[42]["buckets"][("Ha", 300.0)] == 1
     assert tracker["files_without_project"] == 0
 
@@ -224,20 +228,35 @@ def test_process_fits_file_project_not_found_tracks_counter(monkeypatch, capsys)
         project_tracker=tracker,
     )
     out = capsys.readouterr().out
-    assert "Project not found" in out
+    assert "[unmatched" in out
+    assert "unknown_001.fits" in out
     assert project_stats == {}
     assert tracker["files_without_project"] == 1
 
 
 class _FakeResponse:
+    def __init__(self, payload=None):
+        self._payload = payload or {}
+
     def raise_for_status(self):
         return None
 
+    def json(self):
+        return self._payload
+
 
 class _FakeSession:
-    def __init__(self):
+    """Test double for ``requests.Session`` used by the runner.
+
+    Records POST/PATCH/GET calls and lets each test inject a stable response
+    payload for the GET /api/projects/{id} fresh-fetch the runner now performs.
+    """
+
+    def __init__(self, get_payload=None):
         self.post_calls = []
         self.patch_calls = []
+        self.get_calls = []
+        self._get_payload = get_payload
 
     def post(self, url, json=None, timeout=None, headers=None):
         self.post_calls.append((url, json, timeout, headers))
@@ -247,10 +266,13 @@ class _FakeSession:
         self.patch_calls.append((url, json, timeout, headers))
         return _FakeResponse()
 
+    def get(self, url, timeout=None, headers=None):
+        self.get_calls.append((url, timeout, headers))
+        return _FakeResponse(self._get_payload)
 
-def test_sync_project_stats_creates_missing_subframe():
-    session = _FakeSession()
-    client = type(
+
+def _make_client(session):
+    return type(
         "C",
         (),
         {
@@ -260,6 +282,11 @@ def test_sync_project_stats_creates_missing_subframe():
             "_get_auth_headers": lambda self: {"Authorization": "Bearer x"},
         },
     )()
+
+
+def test_sync_project_stats_creates_missing_subframe():
+    session = _FakeSession(get_payload={"status": True, "project": {"project_id": 42, "name": "M42", "subframes": []}})
+    client = _make_client(session)
     stats = {
         42: {
             "name": "M42",
@@ -279,17 +306,14 @@ def test_sync_project_stats_creates_missing_subframe():
 
 
 def test_sync_project_stats_updates_existing_subframe_count_only():
-    session = _FakeSession()
-    client = type(
-        "C",
-        (),
-        {
-            "base_url": "https://example.test/api/",
-            "timeout": 5,
-            "session": session,
-            "_get_auth_headers": lambda self: {"Authorization": "Bearer x"},
-        },
-    )()
+    fresh = {
+        "project_id": 42, "name": "M42",
+        "subframes": [
+            {"id": 77, "filter": {"short_name": "Ha"}, "exposure_time": 300.0, "count": 1, "goal_count": 10}
+        ],
+    }
+    session = _FakeSession(get_payload={"status": True, "project": fresh})
+    client = _make_client(session)
     stats = {
         42: {
             "name": "M42",
@@ -309,3 +333,86 @@ def test_sync_project_stats_updates_existing_subframe_count_only():
     assert len(session.patch_calls) == 1
     assert session.patch_calls[0][0].endswith("/projects/42/subframes/77")
     assert session.patch_calls[0][1] == {"count": 5}
+    # Runner re-fetches the project right before sync so it compares against
+    # fresh server state instead of a possibly stale cached copy.
+    assert len(session.get_calls) == 1
+    assert session.get_calls[0][0].endswith("/projects/42")
+
+
+def test_sync_project_stats_skips_when_count_unchanged(capsys):
+    """No PATCH is issued when server count already matches the bucket count."""
+    fresh = {
+        "project_id": 42, "name": "M42",
+        "subframes": [
+            {"id": 77, "filter": {"short_name": "Ha"}, "exposure_time": 300.0, "count": 5, "goal_count": 10}
+        ],
+    }
+    session = _FakeSession(get_payload={"status": True, "project": fresh})
+    client = _make_client(session)
+    stats = {
+        42: {
+            "name": "M42",
+            "project": {"project_id": 42, "name": "M42", "subframes": fresh["subframes"]},
+            "buckets": {("Ha", 300.0): 5},
+        }
+    }
+    ok = cmd_volumes._sync_project_stats_to_server(client, stats)
+    assert ok is True
+    assert session.patch_calls == []
+    assert session.post_calls == []
+    out = capsys.readouterr().out
+    assert "skipped" in out
+    assert "goal_count=10" in out
+
+
+def test_sync_project_stats_uses_fresh_data_when_cache_is_stale(capsys):
+    """The fresh GET trumps the stale cached project so we don't double-PATCH."""
+    fresh = {
+        "project_id": 42, "name": "M42",
+        "subframes": [
+            {"id": 77, "filter": {"short_name": "Ha"}, "exposure_time": 300.0, "count": 7, "goal_count": 10}
+        ],
+    }
+    session = _FakeSession(get_payload={"status": True, "project": fresh})
+    client = _make_client(session)
+    stats = {
+        42: {
+            "name": "M42",
+            # Cached count is 1 (stale) but server now reports 7 == bucket → skip.
+            "project": {
+                "project_id": 42, "name": "M42",
+                "subframes": [{"id": 77, "filter": {"short_name": "Ha"}, "exposure_time": 300.0, "count": 1, "goal_count": 10}],
+            },
+            "buckets": {("Ha", 300.0): 7},
+        }
+    }
+    ok = cmd_volumes._sync_project_stats_to_server(client, stats)
+    assert ok is True
+    assert session.patch_calls == []
+    out = capsys.readouterr().out
+    assert "skipped" in out
+
+
+def test_sync_project_stats_color_codes_at_or_above_goal(capsys):
+    """When count >= goal_count the line uses the green ANSI sequence."""
+    fresh = {
+        "project_id": 42, "name": "M42",
+        "subframes": [
+            {"id": 77, "filter": {"short_name": "Ha"}, "exposure_time": 300.0, "count": 1, "goal_count": 10}
+        ],
+    }
+    session = _FakeSession(get_payload={"status": True, "project": fresh})
+    client = _make_client(session)
+    stats = {
+        42: {
+            "name": "M42",
+            "project": {"project_id": 42, "name": "M42", "subframes": fresh["subframes"]},
+            "buckets": {("Ha", 300.0): 12},  # exceeds goal_count=10 → green
+        }
+    }
+    cmd_volumes._sync_project_stats_to_server(client, stats)
+    assert len(session.patch_calls) == 1
+    out = capsys.readouterr().out
+    assert "updated" in out
+    assert "count=12" in out
+    assert "goal_count=10" in out
