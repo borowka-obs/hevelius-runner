@@ -109,6 +109,47 @@ def test_doctor_command_success(tmp_path, capsys, runner_mod):
         assert "Connectivity check passed" in out or "check passed" in out
 
 
+def test_doctor_continues_when_api_unreachable(tmp_path, capsys, runner_mod):
+    cfg = tmp_path / "c.yaml"
+    fake_nina = tmp_path / "nina_fake.exe"
+    fake_nina.write_bytes(b"")
+
+    cfg.write_text(
+        textwrap.dedent(
+            f"""
+            api:
+              base_url: https://example.test/api/
+              timeout: 5
+              username: u
+              password: p
+              verify_ssl: false
+              scope_id: 1
+            paths:
+              template_dir: t
+              output_dir: o
+            nina:
+              executable_path: {fake_nina}
+            scripts: {{}}
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+
+    with patch.object(runner_mod, "APIClient") as MockClient:
+        client = MagicMock()
+        client.get_version.side_effect = ConnectionError("refused")
+        MockClient.return_value = client
+
+        ret = runner_mod.main(["-c", str(cfg), "doctor"])
+        assert ret == 1
+        captured = capsys.readouterr()
+        assert "unreachable" in captured.err
+        assert "Skipping API login" in captured.err
+        assert "NINA executable found" in captured.out
+        client.login.assert_not_called()
+        client.list_telescopes.assert_not_called()
+
+
 def test_version_prints_runner_version(capsys, runner_mod):
     ret = runner_mod.main(["version"])
     assert ret == 0
