@@ -76,6 +76,20 @@ task will be created. Files can be assigned to one of known projects and then th
 project's statistics will be updated, if `--projects` option is specified. Finally,
 there's `--orphans` option to list all files that were not able to assign to any project.
 
+## Excluding files from volumes scan
+
+`hevelius-runner volumes` can skip files based on full-path patterns from
+`config/config.yaml`:
+
+```yaml
+paths:
+  exclude_patterns:
+    - '*FLAT*'
+    - '*shit*'
+```
+
+If a discovered file path matches any pattern, that file is ignored completely
+and is not processed (no header read, no task/project updates).
 
 ## Run
 
@@ -87,9 +101,6 @@ Run the automation loop:
 ```bash
 python src/hevelius-runner.py run
 ```
-
-
-
 
 The `run` command will:
 1. Load configuration
