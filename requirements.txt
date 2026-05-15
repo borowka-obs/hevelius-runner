@@ -1,4 +1,5 @@
 PyYAML
+colorama>=0.4.6
 requests
 psycopg2-binary
 watchdog

@@ -1,73 +1,14 @@
-import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from api_client import APIClient
 from config_manager import ConfigManager
-
-_RED = "\033[91m"
-_RESET = "\033[0m"
-
-# Windows: stderr may be a TTY but ANSI is ignored until VT processing is enabled
-# on that console handle (classic PowerShell / conhost).
-_win32_stderr_vt: Optional[bool] = None
-
-
-def _try_enable_win32_stderr_vt() -> bool:
-    """Enable ANSI on the stderr console handle. Return True if escapes will work."""
-    global _win32_stderr_vt
-    if sys.platform != "win32":
-        return True
-    if _win32_stderr_vt is not None:
-        return _win32_stderr_vt
-    err = sys.stderr
-    if not (hasattr(err, "isatty") and err.isatty()):
-        _win32_stderr_vt = False
-        return False
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.windll.kernel32
-        STD_ERROR_HANDLE = -12
-        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
-
-        handle = kernel32.GetStdHandle(STD_ERROR_HANDLE)
-        if handle in (-1, 0):
-            _win32_stderr_vt = False
-            return False
-        mode = wintypes.DWORD()
-        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-            _win32_stderr_vt = False
-            return False
-        if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
-            _win32_stderr_vt = True
-            return True
-        if kernel32.SetConsoleMode(handle, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING):
-            _win32_stderr_vt = True
-            return True
-    except Exception:
-        pass
-    _win32_stderr_vt = False
-    return False
-
-
-def _stderr_color_enabled() -> bool:
-    if os.environ.get("NO_COLOR"):
-        return False
-    err = sys.stderr
-    if not (hasattr(err, "isatty") and err.isatty()):
-        return False
-    if sys.platform == "win32" and not _try_enable_win32_stderr_vt():
-        return False
-    return True
+from console_color import RED, color_segment
 
 
 def _red(text: str) -> str:
-    if not _stderr_color_enabled():
-        return text
-    return f"{_RED}{text}{_RESET}"
+    return color_segment(RED, text, sys.stderr)
 
 
 def cmd_doctor(cm: ConfigManager, api_client_factory: Callable[[dict], Any] = APIClient) -> int:
