@@ -16,40 +16,11 @@ from fits import (
 from api_client import APIClient
 from cmd_projects import _get_projects_from_endpoint
 from config_manager import ConfigManager
-
-
-# ---- Color helpers --------------------------------------------------------
-# ANSI escape codes are emitted only when stdout is a real TTY; when output is
-# piped to a file or a non-tty terminal, colors collapse to empty strings to
-# avoid littering logs with control sequences.
-
-_GREEN = "\033[92m"
-_YELLOW = "\033[93m"
-_RED = "\033[91m"
-# Orange is a 256-color extension; falls back gracefully on terminals that do
-# not understand the sequence (most modern terminals do).
-_ORANGE = "\033[38;5;208m"
-_DIM = "\033[2m"
-_RESET = "\033[0m"
-
-
-def _supports_color() -> bool:
-    """True if stdout looks like an interactive terminal that supports ANSI.
-
-    Honors the NO_COLOR convention (https://no-color.org/). Re-evaluated on
-    every call so tests that capture stdout (which is not a TTY) see plain
-    ASCII output without depending on import-time state.
-    """
-    if os.environ.get("NO_COLOR"):
-        return False
-    stream = sys.stdout
-    return hasattr(stream, "isatty") and stream.isatty()
+from console_color import GREEN, ORANGE, RED, YELLOW, color_segment
 
 
 def _color(code: str, text: str) -> str:
-    if not code or not _supports_color():
-        return text
-    return f"{code}{text}{_RESET}"
+    return color_segment(code, text, sys.stdout)
 
 
 def get_tasks_files_list(client: APIClient) -> List[Tuple[int, Optional[str]]]:
@@ -384,12 +355,12 @@ def _bucket_action_color(action: str, count: int, goal_count: Optional[int]) -> 
     failed                         -> red
     """
     if action == "skipped":
-        return _ORANGE
+        return ORANGE
     if action == "failed":
-        return _RED
+        return RED
     if goal_count is None or goal_count <= 0:
-        return _GREEN
-    return _GREEN if count >= goal_count else _YELLOW
+        return GREEN
+    return GREEN if count >= goal_count else YELLOW
 
 
 def _sync_one_bucket(
@@ -501,7 +472,7 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
         ):
             if filter_name is None or exposure is None:
                 print(
-                    f"  {_color(_RED, '[failed   ]')} incomplete bucket "
+                    f"  {_color(RED, '[failed   ]')} incomplete bucket "
                     f"filter={filter_name} exposure={exposure} count={count}"
                 )
                 ok = False
@@ -510,7 +481,7 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
                 exposure_f = float(exposure)
             except (TypeError, ValueError):
                 print(
-                    f"  {_color(_RED, '[failed   ]')} invalid exposure "
+                    f"  {_color(RED, '[failed   ]')} invalid exposure "
                     f"filter={filter_name} exposure={exposure!r} count={count}"
                 )
                 ok = False
@@ -658,11 +629,11 @@ def _format_status_tag(status: str) -> str:
     """
     label = f"{status:<9}"
     if status == "matched":
-        return f"[{_color(_GREEN, label)}]"
+        return f"[{_color(GREEN, label)}]"
     if status == "unmatched":
-        return f"[{_color(_RED, label)}]"
+        return f"[{_color(RED, label)}]"
     if status == "skipped":
-        return f"[{_color(_YELLOW, label)}]"
+        return f"[{_color(YELLOW, label)}]"
     return f"[{label}]"
 
 

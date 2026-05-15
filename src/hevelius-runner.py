@@ -36,6 +36,7 @@ from typing import List, Dict, Optional
 
 import yaml
 
+from console_color import init_windows_console
 from config_manager import ConfigManager
 from api_client import APIClient, resolve_scope_id_from_identifier
 from task_manager import TaskManager
@@ -384,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 def main(argv: Optional[List[str]] = None) -> int:
-
+    init_windows_console()
 
     #logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
     setup_logging()
