@@ -3,6 +3,7 @@
 0.3.0 (unreleased)
 
 - Exclude patterns - specified files or directories can be excluded from the volumes handling.
+- Mass rename implemented (`hevelius-runner volumes rename "SUBSTRING1" "SUBSTRING2"`)
 
 0.2.0 (2026-04-28)
 

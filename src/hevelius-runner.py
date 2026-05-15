@@ -317,6 +317,34 @@ def cmd_version(args: argparse.Namespace, cm: ConfigManager) -> int:
     return 0
 
 
+def _add_volumes_path_args(parser: argparse.ArgumentParser) -> None:
+    """File-selection switches shared by ``volumes rename`` and sanity scan."""
+    parser.add_argument(
+        "-f",
+        "--file",
+        help="Rename one specific file (any extension).",
+        type=str,
+    )
+    parser.add_argument(
+        "-l",
+        "--list",
+        help="Rename files listed in a text file (one path per line).",
+        type=str,
+    )
+    parser.add_argument(
+        "-d",
+        "--dir",
+        help="Rename all FITS files recursively under this directory.",
+        type=str,
+    )
+    parser.add_argument(
+        "-a",
+        "--all-files",
+        help="Rename FITS files in all configured paths.volumes (default when no -f/-l/-d).",
+        action="store_true",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Hevelius observatory runner - NINA integration and API client.",
@@ -369,6 +397,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_view.add_argument("--project-id", type=int, help="Numeric project_id.")
 
     repo_parser = sub.add_parser('volumes', help="Manages files repository (volumes)on local storage.")
+    volumes_sub = repo_parser.add_subparsers(dest="volumes_cmd", metavar="SUBCOMMAND")
+    rename_parser = volumes_sub.add_parser(
+        "rename",
+        help="Replace a substring in filenames (basename only) for selected FITS files.",
+    )
+    rename_parser.add_argument(
+        "old_string",
+        help="Substring to find in each file basename (literal match, not a regex).",
+    )
+    rename_parser.add_argument(
+        "new_string",
+        help="Replacement text for each match in the basename.",
+    )
+    _add_volumes_path_args(rename_parser)
     repo_parser.add_argument('-f', "--file", help="Check one specific FITS file", type=str)
     repo_parser.add_argument("-l", "--list", help="Check FITS files listed in a text file (one path per line)", type=str)
     repo_parser.add_argument("-d", "--dir",   help="Check all FITS files recursively in this specific directory", type=str)
