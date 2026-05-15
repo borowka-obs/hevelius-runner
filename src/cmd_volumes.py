@@ -180,6 +180,11 @@ def _normalize_full_path(path: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.abspath(path)))
 
 
+def _resolve_path(path: str) -> str:
+    """Absolute path for filesystem I/O (preserves filename case on Windows)."""
+    return os.path.normpath(os.path.abspath(path))
+
+
 def _is_excluded(full_path: str, exclude_patterns: List[str]) -> bool:
     """
     True if the normalized full path matches any exclusion pattern.
@@ -560,6 +565,146 @@ def process_fits_list(
         cnt += 1
 
 
+def _fits_files_in_dir(dir_path: str, *, resolve: bool = False) -> List[str]:
+    """Return full paths of all ``*.fit`` / ``*.fits`` under ``dir_path``."""
+    to_path = _resolve_path if resolve else _normalize_full_path
+    base = os.path.normpath(dir_path)
+    pattern_fit = os.path.join(base, "**", "*.fit")
+    pattern_fits = os.path.join(base, "**", "*.fits")
+    found_fit = glob.glob(pattern_fit, recursive=True)
+    found_fits = glob.glob(pattern_fits, recursive=True)
+    return sorted({to_path(str(f)) for f in set(found_fit) | set(found_fits)})
+
+
+def _paths_from_list_file(list_path: str, *, resolve: bool = False) -> List[str]:
+    """Return full paths from a text file (one path per line)."""
+    to_path = _resolve_path if resolve else _normalize_full_path
+    paths: List[str] = []
+    with open(list_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line[0] == "#":
+                continue
+            paths.append(to_path(line))
+    return paths
+
+
+def _collect_target_paths(
+    cm: ConfigManager,
+    args,
+    *,
+    resolve: bool = False,
+) -> Tuple[int, List[str]]:
+    """
+    Resolve FITS file paths from ``-f`` / ``-l`` / ``-d`` or all configured volumes.
+
+    Mirrors the path-selection rules used by :func:`sanity_files`.
+    When ``resolve`` is True, paths keep filesystem casing (needed for rename on Windows).
+    """
+    to_path = _resolve_path if resolve else _normalize_full_path
+    exclude_patterns = _exclude_patterns_from_config(cm)
+    paths: List[str] = []
+
+    if args.file:
+        paths.append(to_path(args.file))
+    elif args.list:
+        paths.extend(_paths_from_list_file(args.list, resolve=resolve))
+    elif args.dir:
+        paths.extend(_fits_files_in_dir(args.dir, resolve=resolve))
+    else:
+        volumes = _monitor_volumes_from_config(cm)
+        if not volumes:
+            rp = _repo_path_from_config(cm)
+            if rp is None:
+                print(
+                    "No source paths configured. Configure paths.volumes "
+                    "(or legacy paths.fits_monitor_dir), or use -f / -l / -d.",
+                    file=sys.stderr,
+                )
+                return 1, []
+            volumes = [(rp, "repo-path")]
+        for path, nickname in volumes:
+            print(f"Volume '{nickname}': {path}")
+            paths.extend(_fits_files_in_dir(path, resolve=resolve))
+
+    if exclude_patterns:
+        paths = [p for p in paths if not _is_excluded(p, exclude_patterns)]
+    return 0, paths
+
+
+def _rename_basename(basename: str, old: str, new: str) -> Optional[str]:
+    """Return a new basename when ``old`` appears in ``basename``, else ``None``."""
+    if os.name == "nt":
+        lower_base = basename.lower()
+        lower_old = old.lower()
+        idx = lower_base.find(lower_old)
+        if idx < 0:
+            return None
+        return basename[:idx] + new + basename[idx + len(old) :]
+    if old not in basename:
+        return None
+    return basename.replace(old, new)
+
+
+def rename_files(cm: ConfigManager, args) -> int:
+    """Replace ``old_string`` with ``new_string`` in each selected file's basename."""
+    code = _require_loaded(cm)
+    if code != 0:
+        return code
+
+    old = str(getattr(args, "old_string", "") or "")
+    new = str(getattr(args, "new_string", "") or "")
+    if not old:
+        print("rename requires a non-empty search string.", file=sys.stderr)
+        return 1
+
+    code, paths = _collect_target_paths(cm, args, resolve=True)
+    if code != 0:
+        return code
+    if not paths:
+        print("No files to rename.")
+        return 0
+
+    print(f"Renaming basename substring {old!r} -> {new!r} in {len(paths)} file(s).")
+    renamed = 0
+    skipped = 0
+    failed = 0
+
+    for src in paths:
+        if not os.path.isfile(src):
+            print(f"  skip (not a file): {src}", file=sys.stderr)
+            failed += 1
+            continue
+
+        base = os.path.basename(src)
+        new_base = _rename_basename(base, old, new)
+        if new_base is None:
+            skipped += 1
+            continue
+        if new_base == base:
+            skipped += 1
+            continue
+
+        dst = os.path.join(os.path.dirname(src), new_base)
+        if os.path.exists(dst):
+            print(f"  failed (target exists): {src} -> {dst}", file=sys.stderr)
+            failed += 1
+            continue
+
+        try:
+            os.rename(src, dst)
+        except OSError as e:
+            print(f"  failed: {src} -> {dst}: {e}", file=sys.stderr)
+            failed += 1
+            continue
+
+        print(f"  {base} -> {new_base}")
+        renamed += 1
+
+    print(f"Done: {renamed} renamed, {skipped} unchanged, {failed} failed.")
+    return 1 if failed else 0
+
+
 def process_fits_dir(
     client: APIClient,
     dir: str,
@@ -577,12 +722,7 @@ def process_fits_dir(
     :param show_hdr: bool governing whether FITS headers will be printed or not
     """
 
-    base = os.path.normpath(dir)
-    pattern_fit = os.path.join(base, "**", "*.fit")
-    pattern_fits = os.path.join(base, "**", "*.fits")
-    found_fit = glob.glob(pattern_fit, recursive=True)
-    found_fits = glob.glob(pattern_fits, recursive=True)
-    files = sorted(set(found_fit) | set(found_fits))
+    files = _fits_files_in_dir(dir)
 
     print(f"Found {len(files)} files(s) in directory {dir}")
 
@@ -1110,6 +1250,9 @@ def sanity_db(cm: ConfigManager, args) -> int:
 
 def cmd_volumes(cm: ConfigManager, args) -> int:
     """Manages the on disk images repository."""
+
+    if getattr(args, "volumes_cmd", None) == "rename":
+        return rename_files(cm, args)
 
     if args.file or args.list or args.dir or args.all_files:
         return sanity_files(cm, args)
