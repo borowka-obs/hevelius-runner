@@ -26,6 +26,7 @@
 # 4. Handles status updates
 
 import argparse
+import copy
 import logging
 import sys
 import time
@@ -36,7 +37,7 @@ from typing import List, Dict, Optional
 
 import yaml
 
-from console_color import init_windows_console
+from console_color import init_windows_console, color_segment, RED, YELLOW
 from config_manager import ConfigManager
 from api_client import APIClient, resolve_scope_id_from_identifier
 from task_manager import TaskManager
@@ -49,24 +50,62 @@ from cmd_telescope import cmd_telescope_list, cmd_telescope_set
 from cmd_doctor import cmd_doctor
 from cmd_projects import cmd_projects
 
+_LEVEL_ABBREV = {
+    "DEBUG":    "DEBG",
+    "INFO":     "INFO",
+    "WARNING":  "WARN",
+    "ERROR":    "ERRO",
+    "CRITICAL": "CRIT",
+}
+
+_LEVEL_COLOR = {
+    "WARNING":  YELLOW,
+    "ERROR":    RED,
+    "CRITICAL": RED,
+}
+
+
+class _ShortLevelFormatter(logging.Formatter):
+    """Formats the log level as a fixed 4-letter abbreviation."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        record = copy.copy(record)
+        record.levelname = _LEVEL_ABBREV.get(record.levelname, record.levelname[:4].upper())
+        return super().format(record)
+
+
+class _ColoredShortLevelFormatter(logging.Formatter):
+    """Like _ShortLevelFormatter but colorizes WARN/ERRO/CRIT on color-capable streams."""
+
+    def __init__(self, fmt: str, stream) -> None:
+        super().__init__(fmt)
+        self._stream = stream
+
+    def format(self, record: logging.LogRecord) -> str:
+        record = copy.copy(record)
+        color = _LEVEL_COLOR.get(record.levelname)
+        abbrev = _LEVEL_ABBREV.get(record.levelname, record.levelname[:4].upper())
+        record.levelname = color_segment(color, abbrev, self._stream) if color else abbrev
+        return super().format(record)
+
+
 def setup_logging():
     """Configure logging for the application."""
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    # Full logging: format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(levelname)s - %(message)s',
-        handlers=[
-            RotatingFileHandler(
-                log_dir / 'observatory.log',
-                maxBytes=1024*1024,
-                backupCount=5
-            ),
-            logging.StreamHandler(sys.stdout)
-        ]
+    fmt = "%(levelname)s %(message)s"
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(_ColoredShortLevelFormatter(fmt, sys.stdout))
+
+    file_handler = RotatingFileHandler(
+        log_dir / 'observatory.log',
+        maxBytes=1024*1024,
+        backupCount=5,
     )
+    file_handler.setFormatter(_ShortLevelFormatter(fmt))
+
+    logging.basicConfig(level=logging.INFO, handlers=[file_handler, stdout_handler])
 
 
 class ObservatoryAutomation:
