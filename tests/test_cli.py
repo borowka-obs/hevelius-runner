@@ -1,3 +1,4 @@
+import logging
 import textwrap
 from unittest.mock import MagicMock, patch
 
@@ -63,7 +64,7 @@ def test_config_command_prints_yaml_without_password(tmp_path, capsys, runner_mo
     assert str(cfg.resolve()) in out
 
 
-def test_doctor_command_success(tmp_path, capsys, runner_mod):
+def test_doctor_command_success(tmp_path, caplog, runner_mod):
     cfg = tmp_path / "c.yaml"
     fake_nina = tmp_path / "nina_fake.exe"
     fake_nina.write_bytes(b"")
@@ -102,14 +103,14 @@ def test_doctor_command_success(tmp_path, capsys, runner_mod):
         client.list_telescopes.return_value = [{"scope_id": 1, "name": "Test"}]
         MockClient.return_value = client
 
-        ret = runner_mod.main(["-c", str(cfg), "doctor"])
+        with caplog.at_level(logging.INFO):
+            ret = runner_mod.main(["-c", str(cfg), "doctor"])
         assert ret == 0
-        out = capsys.readouterr().out
-        assert "1.0.0" in out
-        assert "Connectivity check passed" in out or "check passed" in out
+        assert "1.0.0" in caplog.text
+        assert "All checks passed" in caplog.text
 
 
-def test_doctor_continues_when_api_unreachable(tmp_path, capsys, runner_mod):
+def test_doctor_continues_when_api_unreachable(tmp_path, caplog, runner_mod):
     cfg = tmp_path / "c.yaml"
     fake_nina = tmp_path / "nina_fake.exe"
     fake_nina.write_bytes(b"")
@@ -140,12 +141,12 @@ def test_doctor_continues_when_api_unreachable(tmp_path, capsys, runner_mod):
         client.get_version.side_effect = ConnectionError("refused")
         MockClient.return_value = client
 
-        ret = runner_mod.main(["-c", str(cfg), "doctor"])
+        with caplog.at_level(logging.INFO):
+            ret = runner_mod.main(["-c", str(cfg), "doctor"])
         assert ret == 1
-        captured = capsys.readouterr()
-        assert "unreachable" in captured.err
-        assert "Skipping API login" in captured.err
-        assert "NINA executable found" in captured.out
+        assert "unreachable" in caplog.text
+        assert "skipped" in caplog.text
+        assert "NINA" in caplog.text
         client.login.assert_not_called()
         client.list_telescopes.assert_not_called()
 
