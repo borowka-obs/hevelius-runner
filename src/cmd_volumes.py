@@ -533,7 +533,8 @@ def process_fits_list(
     with open(fname, encoding="utf-8") as f:
         lines = f.readlines()
 
-    total = len(lines)
+    file_lines = [l for l in lines if l.strip() and not l.strip().startswith("#")]
+    total = len(file_lines)
     print(f"Found {total} filename(s) in file {fname}")
 
     cnt = 1
@@ -633,14 +634,23 @@ def _collect_target_paths(
 
 
 def _rename_basename(basename: str, old: str, new: str) -> Optional[str]:
-    """Return a new basename when ``old`` appears in ``basename``, else ``None``."""
+    """Return a new basename with all occurrences of ``old`` replaced by ``new``,
+    or ``None`` if ``old`` does not appear. Matching is case-insensitive on Windows."""
     if os.name == "nt":
         lower_base = basename.lower()
         lower_old = old.lower()
-        idx = lower_base.find(lower_old)
-        if idx < 0:
+        if lower_old not in lower_base:
             return None
-        return basename[:idx] + new + basename[idx + len(old) :]
+        result = []
+        i = 0
+        while i < len(basename):
+            if lower_base[i:i + len(lower_old)] == lower_old:
+                result.append(new)
+                i += len(lower_old)
+            else:
+                result.append(basename[i])
+                i += 1
+        return "".join(result)
     if old not in basename:
         return None
     return basename.replace(old, new)
@@ -673,7 +683,7 @@ def rename_files(cm: ConfigManager, args) -> int:
     for src in paths:
         if not os.path.isfile(src):
             print(f"  skip (not a file): {src}", file=sys.stderr)
-            failed += 1
+            skipped += 1
             continue
 
         base = os.path.basename(src)
