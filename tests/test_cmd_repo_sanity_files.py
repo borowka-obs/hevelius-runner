@@ -1,5 +1,6 @@
 from argparse import Namespace
 import builtins
+import logging
 
 import cmd_volumes
 
@@ -149,7 +150,7 @@ def test_process_fits_list_skips_excluded_full_path(monkeypatch):
     assert calls[0].lower().endswith(r"good_001.fits")
 
 
-def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, capsys):
+def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caplog):
     cm = _DummyConfigManager()
     calls = []
     volumes = [(r"c:\astro\live", "live")]
@@ -177,59 +178,59 @@ def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caps
 
     monkeypatch.setattr(cmd_volumes, "process_fits_dir", _fake_process_dir)
 
-    ret = cmd_volumes.sanity_files(cm, _base_args(projects=True))
+    with caplog.at_level(logging.INFO):
+        ret = cmd_volumes.sanity_files(cm, _base_args(projects=True))
     assert ret == 0
     assert require_api_connect["value"] is True
     assert len(calls) == 1
     assert calls[0][0] == r"c:\astro\live"
     assert calls[0][1]["projects"] == [{"project_id": 42, "name": "M42", "subframes": []}]
-    out = capsys.readouterr().out
-    assert "PROJECT STATISTICS" in out
-    assert "Files without project match: 1" in out
+    assert "PROJECT STATISTICS" in caplog.text
+    assert "Files without project match: 1" in caplog.text
     # Per-project bucket lines are emitted by _sync_project_stats_to_server
     # which is mocked away in this test, so we only assert the orphan-files
     # header section here.
 
 
-def test_process_fits_file_project_found_updates_stats(monkeypatch, capsys):
+def test_process_fits_file_project_found_updates_stats(monkeypatch, caplog):
     monkeypatch.setattr(cmd_volumes, "read_fits", lambda fname: {"FILTER": "Ha", "EXPTIME": 300, "OBJECT": "x"})
     monkeypatch.setattr(cmd_volumes, "get_task_by_filename", lambda client, key: None)
 
     project_stats = {}
     tracker = {"files_without_project": 0}
-    cmd_volumes.process_fits_file(
-        client=object(),
-        fname=r"c:\repo\M42_001.fits",
-        show_hdr=False,
-        projects=[{"project_id": 42, "name": "M42", "subframes": []}],
-        project_stats=project_stats,
-        project_tracker=tracker,
-    )
-    out = capsys.readouterr().out
-    assert "[matched" in out
-    assert "project='M42'" in out
-    assert "M42_001.fits" in out
+    with caplog.at_level(logging.INFO):
+        cmd_volumes.process_fits_file(
+            client=object(),
+            fname=r"c:\repo\M42_001.fits",
+            show_hdr=False,
+            projects=[{"project_id": 42, "name": "M42", "subframes": []}],
+            project_stats=project_stats,
+            project_tracker=tracker,
+        )
+    assert "[matched" in caplog.text
+    assert "project='M42'" in caplog.text
+    assert "M42_001.fits" in caplog.text
     assert project_stats[42]["buckets"][("Ha", 300.0)] == 1
     assert tracker["files_without_project"] == 0
 
 
-def test_process_fits_file_project_not_found_tracks_counter(monkeypatch, capsys):
+def test_process_fits_file_project_not_found_tracks_counter(monkeypatch, caplog):
     monkeypatch.setattr(cmd_volumes, "read_fits", lambda fname: {"FILTER": "OIII", "EXPTIME": 120, "OBJECT": "x"})
     monkeypatch.setattr(cmd_volumes, "get_task_by_filename", lambda client, key: None)
 
     project_stats = {}
     tracker = {"files_without_project": 0}
-    cmd_volumes.process_fits_file(
-        client=object(),
-        fname=r"c:\repo\unknown_001.fits",
-        show_hdr=False,
-        projects=[{"name": "M42"}],
-        project_stats=project_stats,
-        project_tracker=tracker,
-    )
-    out = capsys.readouterr().out
-    assert "[unmatched" in out
-    assert "unknown_001.fits" in out
+    with caplog.at_level(logging.INFO):
+        cmd_volumes.process_fits_file(
+            client=object(),
+            fname=r"c:\repo\unknown_001.fits",
+            show_hdr=False,
+            projects=[{"name": "M42"}],
+            project_stats=project_stats,
+            project_tracker=tracker,
+        )
+    assert "[unmatched" in caplog.text
+    assert "unknown_001.fits" in caplog.text
     assert project_stats == {}
     assert tracker["files_without_project"] == 1
 
@@ -339,7 +340,7 @@ def test_sync_project_stats_updates_existing_subframe_count_only():
     assert session.get_calls[0][0].endswith("/projects/42")
 
 
-def test_sync_project_stats_skips_when_count_unchanged(capsys):
+def test_sync_project_stats_skips_when_count_unchanged(caplog):
     """No PATCH is issued when server count already matches the bucket count."""
     fresh = {
         "project_id": 42, "name": "M42",
@@ -356,16 +357,16 @@ def test_sync_project_stats_skips_when_count_unchanged(capsys):
             "buckets": {("Ha", 300.0): 5},
         }
     }
-    ok = cmd_volumes._sync_project_stats_to_server(client, stats)
+    with caplog.at_level(logging.INFO):
+        ok = cmd_volumes._sync_project_stats_to_server(client, stats)
     assert ok is True
     assert session.patch_calls == []
     assert session.post_calls == []
-    out = capsys.readouterr().out
-    assert "skipped" in out
-    assert "goal_count=10" in out
+    assert "skipped" in caplog.text
+    assert "goal_count=10" in caplog.text
 
 
-def test_sync_project_stats_uses_fresh_data_when_cache_is_stale(capsys):
+def test_sync_project_stats_uses_fresh_data_when_cache_is_stale(caplog):
     """The fresh GET trumps the stale cached project so we don't double-PATCH."""
     fresh = {
         "project_id": 42, "name": "M42",
@@ -386,14 +387,14 @@ def test_sync_project_stats_uses_fresh_data_when_cache_is_stale(capsys):
             "buckets": {("Ha", 300.0): 7},
         }
     }
-    ok = cmd_volumes._sync_project_stats_to_server(client, stats)
+    with caplog.at_level(logging.INFO):
+        ok = cmd_volumes._sync_project_stats_to_server(client, stats)
     assert ok is True
     assert session.patch_calls == []
-    out = capsys.readouterr().out
-    assert "skipped" in out
+    assert "skipped" in caplog.text
 
 
-def test_sync_project_stats_color_codes_at_or_above_goal(capsys):
+def test_sync_project_stats_color_codes_at_or_above_goal(caplog):
     """When count >= goal_count the line uses the green ANSI sequence."""
     fresh = {
         "project_id": 42, "name": "M42",
@@ -410,9 +411,9 @@ def test_sync_project_stats_color_codes_at_or_above_goal(capsys):
             "buckets": {("Ha", 300.0): 12},  # exceeds goal_count=10 → green
         }
     }
-    cmd_volumes._sync_project_stats_to_server(client, stats)
+    with caplog.at_level(logging.INFO):
+        cmd_volumes._sync_project_stats_to_server(client, stats)
     assert len(session.patch_calls) == 1
-    out = capsys.readouterr().out
-    assert "updated" in out
-    assert "count=12" in out
-    assert "goal_count=10" in out
+    assert "updated" in caplog.text
+    assert "count=12" in caplog.text
+    assert "goal_count=10" in caplog.text

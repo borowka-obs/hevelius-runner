@@ -18,6 +18,8 @@ from cmd_projects import _get_projects_from_endpoint
 from config_manager import ConfigManager
 from console_color import GREEN, ORANGE, RED, YELLOW, color_segment
 
+logger = logging.getLogger(__name__)
+
 
 def _color(code: str, text: str) -> str:
     return color_segment(code, text, sys.stdout)
@@ -56,7 +58,7 @@ def task_filename_exists(client: APIClient, filename: str) -> bool:
 def _require_loaded(cm: ConfigManager) -> int:
     if cm.loaded:
         return 0
-    print("Cannot continue without a valid configuration file.", file=sys.stderr)
+    logger.error("Cannot continue without a valid configuration file.")
     return 1
 
 
@@ -68,9 +70,8 @@ def _require_api(cm: ConfigManager, connect: bool = True) -> Tuple[int, Optional
     required = ("base_url", "timeout", "username", "password")
     missing = [k for k in required if not str(api_cfg.get(k, "")).strip()]
     if missing:
-        print(f"API configuration incomplete (missing: {', '.join(missing)}).", file=sys.stderr)
+        logger.error(f"API configuration incomplete (missing: {', '.join(missing)}).")
         return 1, None
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
     client = APIClient(api_cfg)
     if not connect:
         return 0, client
@@ -78,7 +79,7 @@ def _require_api(cm: ConfigManager, connect: bool = True) -> Tuple[int, Optional
     try:
         client.connect()
     except Exception as e:
-        print(f"API login failed: {e}", file=sys.stderr)
+        logger.error(f"API login failed: {e}")
         return 1, None
     return 0, client
 
@@ -87,10 +88,7 @@ def _repo_path_from_config(cm: ConfigManager) -> Optional[str]:
     paths = cm.get_paths_config()
     raw = paths.get("repo-path")
     if raw is None or not str(raw).strip():
-        print(
-            "paths.repo-path is not set in config. Add e.g. repo-path: data/repo under paths.",
-            file=sys.stderr,
-        )
+        logger.error("paths.repo-path is not set in config. Add e.g. repo-path: data/repo under paths.")
         return None
     return os.path.expanduser(os.path.expandvars(str(raw).strip()))
 
@@ -116,20 +114,16 @@ def _monitor_volumes_from_config(cm: ConfigManager) -> List[Tuple[str, str]]:
             if isinstance(volume, dict):
                 raw_path = volume.get("path")
                 if raw_path is None or not str(raw_path).strip():
-                    print(
-                        f"paths.volumes[{idx}] is missing required key 'path'.",
-                        file=sys.stderr,
-                    )
+                    logger.error(f"paths.volumes[{idx}] is missing required key 'path'.")
                     continue
                 p = os.path.expanduser(os.path.expandvars(str(raw_path).strip()))
                 nickname = str(volume.get("nickname") or f"volume-{idx + 1}")
                 volumes.append((p, nickname))
                 continue
 
-            print(
+            logger.error(
                 f"paths.volumes[{idx}] must be either a string path or mapping "
-                f"with keys 'path' and optional 'nickname'.",
-                file=sys.stderr,
+                f"with keys 'path' and optional 'nickname'."
             )
 
     if volumes:
@@ -163,16 +157,13 @@ def _exclude_patterns_from_config(cm: ConfigManager) -> List[str]:
             if item is None:
                 continue
             if not isinstance(item, str):
-                print(
-                    f"paths.exclude_patterns[{idx}] must be a string pattern.",
-                    file=sys.stderr,
-                )
+                logger.error(f"paths.exclude_patterns[{idx}] must be a string pattern.")
                 continue
             p = item.strip()
             if p:
                 out.append(p)
         return out
-    print("paths.exclude_patterns must be a string or list of strings.", file=sys.stderr)
+    logger.error("paths.exclude_patterns must be a string or list of strings.")
     return []
 
 
@@ -286,14 +277,13 @@ def _print_project_stats(
     """Print the orphan-files header. Per-bucket details (with color and the
     add/update/skip action) are printed by :func:`_sync_project_stats_to_server`,
     which is the only code path that knows the action that was actually taken."""
-    print()
-    print("=== PROJECT STATISTICS ===")
-    print(f"Files without project match: {files_without_project}")
+    logger.info("=== PROJECT STATISTICS ===")
+    logger.info(f"Files without project match: {files_without_project}")
     if files_without_project_names:
         for name in files_without_project_names:
-            print(f"  {name}")
+            logger.info(f"  {name}")
     if not project_stats:
-        print("No project subframes were matched.")
+        logger.info("No project subframes were matched.")
 
 
 def _subframe_filter_name(subframe: Dict[str, Any]) -> Optional[str]:
@@ -463,10 +453,10 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
         if not isinstance(subframes, list):
             subframes = []
 
-        print(f"Project: {project_name}")
+        logger.info(f"Project: {project_name}")
         buckets = entry.get("buckets", {})
         total_files = sum(buckets.values())
-        print(f"  Total matched files: {total_files}")
+        logger.info(f"  Total matched files: {total_files}")
 
         for (filter_name, exposure), count in sorted(
             buckets.items(),
@@ -476,7 +466,7 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
             ),
         ):
             if filter_name is None or exposure is None:
-                print(
+                logger.error(
                     f"  {_color(RED, '[failed   ]')} incomplete bucket "
                     f"filter={filter_name} exposure={exposure} count={count}"
                 )
@@ -485,7 +475,7 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
             try:
                 exposure_f = float(exposure)
             except (TypeError, ValueError):
-                print(
+                logger.error(
                     f"  {_color(RED, '[failed   ]')} invalid exposure "
                     f"filter={filter_name} exposure={exposure!r} count={count}"
                 )
@@ -510,7 +500,7 @@ def _sync_project_stats_to_server(client: APIClient, project_stats: Dict[int, Di
                 line += f" goal_count={goal_count}"
             if error:
                 line += f"  ({error})"
-            print(_color(color, line))
+            logger.info(_color(color, line))
     return ok
 
 def process_fits_list(
@@ -535,7 +525,7 @@ def process_fits_list(
 
     file_lines = [l for l in lines if l.strip() and not l.strip().startswith("#")]
     total = len(file_lines)
-    print(f"Found {total} filename(s) in file {fname}")
+    logger.info(f"Found {total} filename(s) in file {fname}")
 
     cnt = 1
     for line in lines:
@@ -548,7 +538,7 @@ def process_fits_list(
         full_path = _normalize_full_path(line)
         if _is_excluded(full_path, exclude_patterns or []):
             progress = _format_progress(cnt, total)
-            print(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
+            logger.info(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
             cnt += 1
             continue
 
@@ -617,15 +607,14 @@ def _collect_target_paths(
         if not volumes:
             rp = _repo_path_from_config(cm)
             if rp is None:
-                print(
+                logger.error(
                     "No source paths configured. Configure paths.volumes "
-                    "(or legacy paths.fits_monitor_dir), or use -f / -l / -d.",
-                    file=sys.stderr,
+                    "(or legacy paths.fits_monitor_dir), or use -f / -l / -d."
                 )
                 return 1, []
             volumes = [(rp, "repo-path")]
         for path, nickname in volumes:
-            print(f"Volume '{nickname}': {path}")
+            logger.info(f"Volume '{nickname}': {path}")
             paths.extend(_fits_files_in_dir(path, resolve=resolve))
 
     if exclude_patterns:
@@ -665,24 +654,24 @@ def rename_files(cm: ConfigManager, args) -> int:
     old = str(getattr(args, "old_string", "") or "")
     new = str(getattr(args, "new_string", "") or "")
     if not old:
-        print("rename requires a non-empty search string.", file=sys.stderr)
+        logger.error("rename requires a non-empty search string.")
         return 1
 
     code, paths = _collect_target_paths(cm, args, resolve=True)
     if code != 0:
         return code
     if not paths:
-        print("No files to rename.")
+        logger.info("No files to rename.")
         return 0
 
-    print(f"Renaming basename substring {old!r} -> {new!r} in {len(paths)} file(s).")
+    logger.info(f"Renaming basename substring {old!r} -> {new!r} in {len(paths)} file(s).")
     renamed = 0
     skipped = 0
     failed = 0
 
     for src in paths:
         if not os.path.isfile(src):
-            print(f"  skip (not a file): {src}", file=sys.stderr)
+            logger.warning(f"  skip (not a file): {src}")
             skipped += 1
             continue
 
@@ -697,21 +686,21 @@ def rename_files(cm: ConfigManager, args) -> int:
 
         dst = os.path.join(os.path.dirname(src), new_base)
         if os.path.exists(dst):
-            print(f"  failed (target exists): {src} -> {dst}", file=sys.stderr)
+            logger.error(f"  failed (target exists): {src} -> {dst}")
             failed += 1
             continue
 
         try:
             os.rename(src, dst)
         except OSError as e:
-            print(f"  failed: {src} -> {dst}: {e}", file=sys.stderr)
+            logger.error(f"  failed: {src} -> {dst}: {e}")
             failed += 1
             continue
 
-        print(f"  {base} -> {new_base}")
+        logger.info(f"  {base} -> {new_base}")
         renamed += 1
 
-    print(f"Done: {renamed} renamed, {skipped} unchanged, {failed} failed.")
+    logger.info(f"Done: {renamed} renamed, {skipped} unchanged, {failed} failed.")
     return 1 if failed else 0
 
 
@@ -734,7 +723,7 @@ def process_fits_dir(
 
     files = _fits_files_in_dir(dir)
 
-    print(f"Found {len(files)} files(s) in directory {dir}")
+    logger.info(f"Found {len(files)} files(s) in directory {dir}")
 
     cnt = 1
     total = len(files)
@@ -743,7 +732,7 @@ def process_fits_dir(
         full_path = _normalize_full_path(str(f))
         if _is_excluded(full_path, exclude_patterns or []):
             progress = _format_progress(cnt, total)
-            print(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
+            logger.info(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
             cnt += 1
             continue
 
@@ -787,17 +776,14 @@ def _format_status_tag(status: str) -> str:
     return f"[{label}]"
 
 
-def _format_file_params(filter_name: Optional[str], exposure: Optional[float],
-                        object_name: Optional[str]) -> str:
-    """Render ``filter=… exposure=… object=…`` skipping fields that are None."""
+def _format_file_params(filter_name: Optional[str], exposure: Optional[float]) -> str:
+    """Render compact ``(filter, Xs)`` params; omits fields that are None."""
     parts = []
     if filter_name is not None:
-        parts.append(f"filter={filter_name}")
+        parts.append(str(filter_name))
     if exposure is not None:
-        parts.append(f"exposure={exposure}")
-    if object_name is not None:
-        parts.append(f"object={object_name}")
-    return " ".join(parts)
+        parts.append(f"{exposure:g}s")
+    return f"({', '.join(parts)})" if parts else ""
 
 
 def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool = False,
@@ -854,22 +840,24 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
     extras: List[str] = []
     if project is not None:
         extras.append(f"project={_project_name(project)!r}")
+    if status == "unmatched" and object is not None:
+        extras.append(f"object={object}")
     if update_task:
         if task:
             extras.append(f"task_id={task[0]}")
         else:
             extras.append("task=none")
 
-    params = _format_file_params(filter, exposure, object)
+    params = _format_file_params(filter, exposure)
     progress = _format_progress(idx, total)
     tag = _format_status_tag(status)
-    extras_s = ("  " + " ".join(extras)) if extras else ""
-    params_s = ("  " + params) if params else ""
-    print(f"{progress}{tag} {fname}{params_s}{extras_s}")
+    extras_s = (" " + " ".join(extras)) if extras else ""
+    params_s = f" {params}" if params else ""
+    logger.info(f"{progress}{tag} {fname}{params_s}{extras_s}")
 
     if show_hdr:
         for k in h.keys():
-            print(f"    {k}: {h[k]}")
+            logger.info(f"    {k}: {h[k]}")
 
     if update_task:
         if task:
@@ -933,18 +921,17 @@ def task_add(client: APIClient, fname: str, verbose: bool = False):
     h = read_fits(fname)
     payload, missing = _extract_task_payload_from_header(client, h, fname)
     if missing:
-        print(
-            f"Task add skipped for {fname!r}: missing required fields for /api/task-add: {', '.join(missing)}.",
-            file=sys.stderr,
+        logger.warning(
+            f"Task add skipped for {fname!r}: missing required fields for /api/task-add: {', '.join(missing)}."
         )
         return
     res = client.task_add(payload)
     if verbose:
-        print(f"task-add payload={payload!r}")
+        logger.info(f"task-add payload={payload!r}")
     if not res.get("status"):
-        print(f"Task add failed for {fname!r}: {res.get('msg', 'unknown error')}", file=sys.stderr)
+        logger.error(f"Task add failed for {fname!r}: {res.get('msg', 'unknown error')}")
         return
-    print(f"  Task created: task_id={res.get('task_id')} for {fname!r}")
+    logger.info(f"  Task created: task_id={res.get('task_id')} for {fname!r}")
 
 
 def task_update(client: APIClient, fname: str, task_id: int, verbose=False):
@@ -965,11 +952,11 @@ def task_update(client: APIClient, fname: str, task_id: int, verbose=False):
     payload = {k: v for k, v in payload.items() if v is not None}
     res = client.task_update(payload)
     if verbose:
-        print(f"task-update payload={payload!r}")
+        logger.info(f"task-update payload={payload!r}")
     if not res.get("status"):
-        print(f"Task {task_id} update failed: {res.get('msg', 'unknown error')}", file=sys.stderr)
+        logger.error(f"Task {task_id} update failed: {res.get('msg', 'unknown error')}")
         return
-    print(f"  Task updated via API: task_id={task_id}")
+    logger.info(f"  Task updated via API: task_id={task_id}")
 
 
 def parse_ra(s):
@@ -1008,9 +995,9 @@ def sanity_files(cm: ConfigManager, args) -> int:
     collect_orphans = bool(getattr(args, "orphans", False))
     exclude_patterns = _exclude_patterns_from_config(cm)
     if exclude_patterns:
-        print(f"Exclude patterns enabled ({len(exclude_patterns)}): {exclude_patterns}")
+        logger.info(f"Exclude patterns enabled ({len(exclude_patterns)}): {exclude_patterns}")
     if collect_orphans and not use_projects:
-        print("--orphans requires --projects.", file=sys.stderr)
+        logger.error("--orphans requires --projects.")
         return 1
 
     code, client = _require_api(cm, connect=update_task or use_projects)
@@ -1026,18 +1013,17 @@ def sanity_files(cm: ConfigManager, args) -> int:
     if use_projects:
         scope_id = _scope_id_from_config(cm)
         if scope_id is None:
-            print(
+            logger.error(
                 "api.scope_id is not set. Run: hevelius-runner telescope list\n"
-                "Then: hevelius-runner telescope set <id_or_name>",
-                file=sys.stderr,
+                "Then: hevelius-runner telescope set <id_or_name>"
             )
             return 1
         try:
             projects = _fetch_projects_list(client, scope_id)
         except Exception as e:
-            print(f"Failed to fetch projects list: {e}", file=sys.stderr)
+            logger.error(f"Failed to fetch projects list: {e}")
             return 1
-        print(f"Project processing enabled: loaded {len(projects)} project(s).")
+        logger.info(f"Project processing enabled: loaded {len(projects)} project(s).")
 
     def _project_kwargs() -> Dict[str, Any]:
         if not use_projects:
@@ -1051,9 +1037,9 @@ def sanity_files(cm: ConfigManager, args) -> int:
     if args.file:
         full_path = _normalize_full_path(args.file)
         if _is_excluded(full_path, exclude_patterns):
-            print(f"Ignoring single file (excluded): {full_path}")
+            logger.info(f"Ignoring single file (excluded): {full_path}")
             return 0
-        print(f"Processing single file: {full_path}")
+        logger.info(f"Processing single file: {full_path}")
         if update_task:
             process_fits_file(client, full_path, show_hdr=args.show_header, update_task=True, **_project_kwargs())
         else:
@@ -1069,7 +1055,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
         return 0
 
     if args.list:
-        print(f"Processing list of files stored in {args.list}")
+        logger.info(f"Processing list of files stored in {args.list}")
         if update_task:
             process_fits_list(
                 client,
@@ -1099,7 +1085,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
 
     if args.dir:
         path = args.dir
-        print(f"Processing all files in dir: {path}")
+        logger.info(f"Processing all files in dir: {path}")
         if update_task:
             process_fits_dir(
                 client,
@@ -1131,17 +1117,16 @@ def sanity_files(cm: ConfigManager, args) -> int:
     if not volumes:
         rp = _repo_path_from_config(cm)
         if rp is None:
-            print(
+            logger.error(
                 "No source paths configured for --sanity-files. Configure paths.volumes "
-                "(or legacy paths.fits_monitor_dir).",
-                file=sys.stderr,
+                "(or legacy paths.fits_monitor_dir)."
             )
             return 1
         volumes = [(rp, "repo-path")]
 
-    print(f"Processing all *.fit/*.fits files across {len(volumes)} configured volume(s).")
+    logger.info(f"Processing all *.fit/*.fits files across {len(volumes)} configured volume(s).")
     for path, nickname in volumes:
-        print(f"Volume '{nickname}': {path}")
+        logger.info(f"Volume '{nickname}': {path}")
         if update_task:
             process_fits_dir(
                 client,
@@ -1185,19 +1170,16 @@ def sanity_db(cm: ConfigManager, args) -> int:
     max_task_id = getattr(args, "max_task_id", None)
     delete_invalid = getattr(args, "delete_invalid", False)
 
-    print(f"Checking API task list against repository path: {repo_path}")
+    logger.info(f"Checking API task list against repository path: {repo_path}")
     if min_task_id is not None or max_task_id is not None:
-        print(f"Task ID range: {min_task_id or 'all'} to {max_task_id or 'all'}")
-    print(f"Delete invalid tasks: {delete_invalid}")
-    print()
+        logger.info(f"Task ID range: {min_task_id or 'all'} to {max_task_id or 'all'}")
+    logger.info(f"Delete invalid tasks: {delete_invalid}")
 
     if delete_invalid:
-        print(
+        logger.warning(
             "Note: --delete-invalid is not supported: the Hevelius API exposes no task-delete "
-            "operation from this client; invalid tasks were not removed.",
-            file=sys.stderr,
+            "operation from this client; invalid tasks were not removed."
         )
-        print()
 
     rows = get_tasks_files_list(client)
     tasks = []
@@ -1209,11 +1191,10 @@ def sanity_db(cm: ConfigManager, args) -> int:
         tasks.append((task_id, imagename))
 
     if not tasks:
-        print("No tasks found in the specified range.")
+        logger.info("No tasks found in the specified range.")
         return 0
 
-    print(f"Found {len(tasks)} tasks to check.")
-    print()
+    logger.info(f"Found {len(tasks)} tasks to check.")
 
     tasks_no_filename: List[int] = []
     tasks_missing_file: List[Tuple[int, str]] = []
@@ -1230,30 +1211,24 @@ def sanity_db(cm: ConfigManager, args) -> int:
         else:
             tasks_missing_file.append((task_id, imagename))
 
-    print("=== SANITY CHECK RESULTS ===")
-    print()
+    logger.info("=== SANITY CHECK RESULTS ===")
 
     if tasks_no_filename:
-        print(f"Tasks with NO filename specified ({len(tasks_no_filename)}):")
+        logger.warning(f"Tasks with NO filename specified ({len(tasks_no_filename)}):")
         for task_id in tasks_no_filename:
-            print(f"  Task {task_id}")
-        print()
+            logger.warning(f"  Task {task_id}")
     else:
-        print("✓ All tasks have filenames specified.")
-        print()
+        logger.info("All tasks have filenames specified.")
 
     if tasks_missing_file:
-        print(f"Tasks with MISSING files on disk ({len(tasks_missing_file)}):")
+        logger.warning(f"Tasks with MISSING files on disk ({len(tasks_missing_file)}):")
         for task_id, filename in tasks_missing_file:
-            print(f"  Task {task_id}: {filename}")
-        print()
+            logger.warning(f"  Task {task_id}: {filename}")
     else:
-        print("✓ All files referenced by tasks exist on disk.")
-        print()
+        logger.info("All files referenced by tasks exist on disk.")
 
-    print(f"Tasks OK: {len(tasks_ok)}")
-    print(f"Total issues: {len(tasks_no_filename) + len(tasks_missing_file)}")
-    print()
+    logger.info(f"Tasks OK: {len(tasks_ok)}")
+    logger.info(f"Total issues: {len(tasks_no_filename) + len(tasks_missing_file)}")
 
     return 0
 
@@ -1270,5 +1245,5 @@ def cmd_volumes(cm: ConfigManager, args) -> int:
     if args.sanity_db:
         return sanity_db(cm, args)
 
-    print("ERROR: No sanity check selected. Use -d (--dir) or -l (--list) or -f (--file) or -a (--all-files) or --sanity-db to check the repository.")
+    logger.error("No sanity check selected. Use -d (--dir) or -l (--list) or -f (--file) or -a (--all-files) or --sanity-db to check the repository.")
     return 1
