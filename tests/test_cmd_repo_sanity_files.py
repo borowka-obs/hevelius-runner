@@ -39,7 +39,7 @@ def test_sanity_files_specific_file(monkeypatch):
     monkeypatch.setattr(
         cmd_volumes,
         "process_fits_file",
-        lambda client, fname, show_hdr=False, update_task=False: calls.append(
+        lambda client, fname, show_hdr=False, update_task=False, **kwargs: calls.append(
             (client, fname, show_hdr, update_task)
         ),
     )
@@ -232,6 +232,67 @@ def test_process_fits_file_project_not_found_tracks_counter(monkeypatch, capsys)
     assert "unknown_001.fits" in out
     assert project_stats == {}
     assert tracker["files_without_project"] == 1
+
+
+def test_find_project_for_filename_uses_regexps():
+    projects = [
+        {"project_id": 1, "name": "M31", "regexps": "^M31_"},
+        {"project_id": 2, "name": "M42", "regexps": "M42"},
+    ]
+    assert cmd_volumes._find_project_for_filename("M31_001.fits", projects)["project_id"] == 1
+    assert cmd_volumes._find_project_for_filename("data_M42_stack.fits", projects)["project_id"] == 2
+    assert cmd_volumes._find_project_for_filename("unknown.fits", projects) is None
+
+
+def test_find_project_for_filename_falls_back_to_name_without_regexps():
+    projects = [{"project_id": 42, "name": "M42"}]
+    assert cmd_volumes._find_project_for_filename("M42_001.fits", projects)["project_id"] == 42
+
+
+def test_process_fits_file_verbose_shows_regexp_details(monkeypatch, capsys):
+    monkeypatch.setattr(cmd_volumes, "read_fits", lambda fname: {"FILTER": "Ha", "EXPTIME": 300, "OBJECT": "x"})
+    monkeypatch.setattr(cmd_volumes, "get_task_by_filename", lambda client, key: None)
+
+    cmd_volumes.process_fits_file(
+        client=object(),
+        fname=r"c:\repo\M31_001.fits",
+        show_hdr=False,
+        verbose=2,
+        projects=[
+            {"project_id": 1, "name": "M31", "regexps": "^M31_"},
+            {"project_id": 2, "name": "M42", "regexps": "M42"},
+        ],
+    )
+    out = capsys.readouterr().out
+    assert "regexps:" in out
+    assert "M31(#1)/^M31_:matched" in out
+    assert "M42(#2)/M42:not matched" in out
+
+
+def test_sanity_files_verbose_lists_projects_with_regexps(monkeypatch, capsys):
+    cm = _DummyConfigManager()
+    volumes = [(r"c:\astro\live", "live")]
+
+    monkeypatch.setattr(cmd_volumes, "_require_api", lambda _cm, connect=False: (0, object()))
+    monkeypatch.setattr(cmd_volumes, "_scope_id_from_config", lambda _cm: 3)
+    monkeypatch.setattr(
+        cmd_volumes,
+        "_fetch_projects_list",
+        lambda client, scope_id: [
+            {"project_id": 1, "name": "M31", "regexps": "^M31_"},
+            {"project_id": 2, "name": "M42"},
+        ],
+    )
+    monkeypatch.setattr(cmd_volumes, "_monitor_volumes_from_config", lambda _cm: volumes)
+    monkeypatch.setattr(cmd_volumes, "_sync_project_stats_to_server", lambda client, stats: True)
+    monkeypatch.setattr(cmd_volumes, "process_fits_dir", lambda *args, **kwargs: None)
+
+    ret = cmd_volumes.sanity_files(cm, _base_args(projects=True, verbose=1))
+    assert ret == 0
+    out = capsys.readouterr().out
+    assert "Projects and regexps:" in out
+    assert "project_id=1\tM31\tregexps=^M31_" in out
+    assert "project_id=2\tM42\tregexps=(fallback name: 'M42')" in out
 
 
 class _FakeResponse:
