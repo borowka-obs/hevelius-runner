@@ -4,6 +4,7 @@ Code that handles files repository on disk.
 import glob
 import logging
 import os
+import re
 import sys
 import fnmatch
 from typing import Any, Dict, List, Optional, Tuple
@@ -242,13 +243,95 @@ def _project_name(project: Dict[str, Any]) -> str:
     return ""
 
 
-def _find_project_for_filename(filename: str, projects: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    key = os.path.basename(filename).lower()
+def _project_match_label(project: Dict[str, Any]) -> str:
+    name = _project_name(project)
+    pid = project.get("project_id")
+    if pid is not None:
+        return f"{name}(#{pid})" if name else f"#{pid}"
+    return name or "?"
+
+
+def _parse_project_regexps(project: Dict[str, Any]) -> List[str]:
+    raw = project.get("regexps")
+    if raw is None or not str(raw).strip():
+        return []
+    return [part for part in str(raw).split() if part]
+
+
+def _project_match_patterns(project: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Return ``(kind, pattern)`` pairs: ``regexp`` from API or ``name`` fallback."""
+    regexps = _parse_project_regexps(project)
+    if regexps:
+        return [("regexp", pattern) for pattern in regexps]
+    name = _project_name(project)
+    if name:
+        return [("name", name)]
+    return []
+
+
+def _pattern_matches_filename(kind: str, pattern: str, basename: str) -> bool:
+    if kind == "name":
+        return pattern.lower() in basename.lower()
+    try:
+        return re.search(pattern, basename, re.IGNORECASE) is not None
+    except re.error:
+        return False
+
+
+RegexpTestResult = Tuple[str, str, str, bool]
+
+
+def _match_project_for_filename(
+    filename: str,
+    projects: List[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], List[RegexpTestResult]]:
+    """Match a basename against project regexps (or name fallback).
+
+    Returns the first matching project and every pattern tested with its status.
+    """
+    key = os.path.basename(filename)
+    tests: List[RegexpTestResult] = []
+    matched_project: Optional[Dict[str, Any]] = None
     for project in projects:
-        name = _project_name(project).lower()
-        if name and name in key:
-            return project
-    return None
+        label = _project_match_label(project)
+        for kind, pattern in _project_match_patterns(project):
+            matched = _pattern_matches_filename(kind, pattern, key)
+            tests.append((label, kind, pattern, matched))
+            if matched and matched_project is None:
+                matched_project = project
+    return matched_project, tests
+
+
+def _find_project_for_filename(filename: str, projects: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    project, _tests = _match_project_for_filename(filename, projects)
+    return project
+
+
+def _format_regexp_tests_summary(tests: List[RegexpTestResult]) -> str:
+    parts = []
+    for label, _kind, pattern, matched in tests:
+        status = "matched" if matched else "not matched"
+        parts.append(f"{label}/{pattern}:{status}")
+    return "regexps: " + " ".join(parts)
+
+
+def _format_project_regexps_display(project: Dict[str, Any]) -> str:
+    raw = project.get("regexps")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    patterns = _project_match_patterns(project)
+    if patterns and patterns[0][0] == "name":
+        return f"(fallback name: {patterns[0][1]!r})"
+    return "(none)"
+
+
+def _print_projects_with_regexps(projects: List[Dict[str, Any]]) -> None:
+    print("Projects and regexps:")
+    for project in projects:
+        pid = project.get("project_id", "?")
+        name = _project_name(project) or "?"
+        regexps_display = _format_project_regexps_display(project)
+        print(f"  project_id={pid}\t{name}\tregexps={regexps_display}")
 
 
 def _update_project_stats(
@@ -522,6 +605,7 @@ def process_fits_list(
     project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
     project_tracker: Optional[Dict[str, int]] = None,
     exclude_patterns: Optional[List[str]] = None,
+    verbose: int = 0,
 ) -> None:
     """
     Processes all FITS files listed in a specified text file.
@@ -562,6 +646,7 @@ def process_fits_list(
             project_tracker=project_tracker,
             idx=cnt,
             total=total,
+            verbose=verbose,
         )
         cnt += 1
 
@@ -724,6 +809,7 @@ def process_fits_dir(
     project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
     project_tracker: Optional[Dict[str, int]] = None,
     exclude_patterns: Optional[List[str]] = None,
+    verbose: int = 0,
 ) -> None:
     """
     Processes all FITS files in specified directory.
@@ -757,6 +843,7 @@ def process_fits_dir(
             project_tracker=project_tracker,
             idx=cnt,
             total=total,
+            verbose=verbose,
         )
         cnt += 1
 
@@ -800,7 +887,7 @@ def _format_file_params(filter_name: Optional[str], exposure: Optional[float],
     return " ".join(parts)
 
 
-def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool = False,
+def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: int = 0,
                       update_task: bool = False,
                       projects: Optional[List[Dict[str, Any]]] = None,
                       project_stats: Optional[Dict[int, Dict[str, Any]]] = None,
@@ -828,8 +915,9 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
         task = get_task_by_filename(client, key)
 
     project = None
+    regexp_tests: List[RegexpTestResult] = []
     if projects is not None:
-        project = _find_project_for_filename(key, projects)
+        project, regexp_tests = _match_project_for_filename(key, projects)
         if project is not None:
             if project_stats is not None:
                 _update_project_stats(project_stats, project, filter, exposure)
@@ -859,6 +947,8 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: bool =
             extras.append(f"task_id={task[0]}")
         else:
             extras.append("task=none")
+    if projects is not None and verbose >= 2 and regexp_tests:
+        extras.append(_format_regexp_tests_summary(regexp_tests))
 
     params = _format_file_params(filter, exposure, object)
     progress = _format_progress(idx, total)
@@ -1006,6 +1096,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
     update_task = bool(getattr(args, "tasks", False))
     use_projects = bool(getattr(args, "projects", False))
     collect_orphans = bool(getattr(args, "orphans", False))
+    verbose = int(getattr(args, "verbose", 0) or 0)
     exclude_patterns = _exclude_patterns_from_config(cm)
     if exclude_patterns:
         print(f"Exclude patterns enabled ({len(exclude_patterns)}): {exclude_patterns}")
@@ -1038,6 +1129,11 @@ def sanity_files(cm: ConfigManager, args) -> int:
             print(f"Failed to fetch projects list: {e}", file=sys.stderr)
             return 1
         print(f"Project processing enabled: loaded {len(projects)} project(s).")
+        if verbose >= 1:
+            _print_projects_with_regexps(projects)
+
+    def _scan_kwargs() -> Dict[str, Any]:
+        return {"verbose": verbose}
 
     def _project_kwargs() -> Dict[str, Any]:
         if not use_projects:
@@ -1055,9 +1151,15 @@ def sanity_files(cm: ConfigManager, args) -> int:
             return 0
         print(f"Processing single file: {full_path}")
         if update_task:
-            process_fits_file(client, full_path, show_hdr=args.show_header, update_task=True, **_project_kwargs())
+            process_fits_file(
+                client, full_path, show_hdr=args.show_header, update_task=True,
+                **_project_kwargs(), **_scan_kwargs(),
+            )
         else:
-            process_fits_file(client, full_path, show_hdr=args.show_header, **_project_kwargs())
+            process_fits_file(
+                client, full_path, show_hdr=args.show_header,
+                **_project_kwargs(), **_scan_kwargs(),
+            )
         if use_projects:
             _print_project_stats(
                 project_stats,
@@ -1078,6 +1180,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
                 update_task=True,
                 exclude_patterns=exclude_patterns,
                 **_project_kwargs(),
+                **_scan_kwargs(),
             )
         else:
             process_fits_list(
@@ -1086,6 +1189,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
                 show_hdr=args.show_header,
                 exclude_patterns=exclude_patterns,
                 **_project_kwargs(),
+                **_scan_kwargs(),
             )
         if use_projects:
             _print_project_stats(
@@ -1108,6 +1212,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
                 update_task=True,
                 exclude_patterns=exclude_patterns,
                 **_project_kwargs(),
+                **_scan_kwargs(),
             )
         else:
             process_fits_dir(
@@ -1116,6 +1221,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
                 show_hdr=args.show_header,
                 exclude_patterns=exclude_patterns,
                 **_project_kwargs(),
+                **_scan_kwargs(),
             )
         if use_projects:
             _print_project_stats(
@@ -1150,6 +1256,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
                 update_task=True,
                 exclude_patterns=exclude_patterns,
                 **_project_kwargs(),
+                **_scan_kwargs(),
             )
         else:
             process_fits_dir(
@@ -1158,6 +1265,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
                 show_hdr=args.show_header,
                 exclude_patterns=exclude_patterns,
                 **_project_kwargs(),
+                **_scan_kwargs(),
             )
     if use_projects:
         _print_project_stats(

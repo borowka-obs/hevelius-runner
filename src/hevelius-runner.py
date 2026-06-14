@@ -457,6 +457,13 @@ def build_parser() -> argparse.ArgumentParser:
     repo_parser.add_argument("--tasks", help="Enable API task add/update while scanning files", action='store_true')
     repo_parser.add_argument("--projects", help="Enable project assignment/statistics while scanning files", action='store_true')
     repo_parser.add_argument("--orphans", help="With --projects, print unmatched filenames after project statistics", action='store_true')
+    repo_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase verbosity (-v with --projects: list projects and regexps; -vv: also show per-file regexp match details).",
+    )
     repo_parser.add_argument("-a", "--all-files", help="Check files against tasks; defaults to scanning all configured paths.volumes when no --file/--list/--dir is given", action='store_true')
     repo_parser.add_argument("--sanity-db", help="Goes through the list of tasks in a database and checks if all files are present", action='store_true')
     repo_parser.add_argument("--min-task-id", help="Minimum task ID to check (for sanity-db)", type=int)
