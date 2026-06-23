@@ -243,14 +243,6 @@ def _project_name(project: Dict[str, Any]) -> str:
     return ""
 
 
-def _project_match_label(project: Dict[str, Any]) -> str:
-    name = _project_name(project)
-    pid = project.get("project_id")
-    if pid is not None:
-        return f"{name}(#{pid})" if name else f"#{pid}"
-    return name or "?"
-
-
 def _parse_project_regexps(project: Dict[str, Any]) -> List[str]:
     raw = project.get("regexps")
     if raw is None or not str(raw).strip():
@@ -259,69 +251,91 @@ def _parse_project_regexps(project: Dict[str, Any]) -> List[str]:
 
 
 def _project_match_patterns(project: Dict[str, Any]) -> List[Tuple[str, str]]:
-    """Return ``(kind, pattern)`` pairs: ``regexp`` from API or ``name`` fallback."""
-    regexps = _parse_project_regexps(project)
-    if regexps:
-        return [("regexp", pattern) for pattern in regexps]
+    """Return ``(kind, pattern)`` pairs: configured regexps plus project name."""
+    patterns: List[Tuple[str, str]] = []
+    for pattern in _parse_project_regexps(project):
+        patterns.append(("regexp", pattern))
     name = _project_name(project)
     if name:
-        return [("name", name)]
-    return []
+        patterns.append(("name", name))
+    return patterns
 
 
-def _pattern_matches_filename(kind: str, pattern: str, basename: str) -> bool:
-    if kind == "name":
-        return pattern.lower() in basename.lower()
-    try:
-        return re.search(pattern, basename, re.IGNORECASE) is not None
-    except re.error:
-        return False
+def _file_match_texts(basename: str, object_name: Optional[str] = None) -> List[str]:
+    """Build the strings tested against project name/regexp patterns."""
+    texts = [basename]
+    if object_name:
+        texts.append(object_name)
+    return texts
 
 
-RegexpTestResult = Tuple[str, str, str, bool]
+def _pattern_matches_texts(kind: str, pattern: str, texts: List[str]) -> bool:
+    for text in texts:
+        if kind == "name":
+            if pattern.lower() in text.lower():
+                return True
+            continue
+        try:
+            if re.search(pattern, text, re.IGNORECASE) is not None:
+                return True
+        except re.error:
+            continue
+    return False
 
 
-def _match_project_for_filename(
+RegexpTestResult = Tuple[Any, str, str, bool]
+
+
+def _format_regexp_tests_summary(tests: List[RegexpTestResult]) -> str:
+    parts = []
+    for project_id, _kind, pattern, matched in tests:
+        pid = project_id if project_id is not None else "?"
+        status = "match" if matched else "no match"
+        color = GREEN if matched else RED
+        parts.append(f"'{pattern}'/{pid}:" + _color(color, status))
+    return "regexps: " + " ".join(parts)
+
+
+def _match_project_for_file(
     filename: str,
     projects: List[Dict[str, Any]],
+    object_name: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], List[RegexpTestResult]]:
-    """Match a basename against project regexps (or name fallback).
+    """Match a file against project regexps and/or name.
 
-    Returns the first matching project and every pattern tested with its status.
+    Patterns are tested against the basename and, when available, the FITS
+    OBJECT header value. Returns the first matching project and every pattern
+    tested with its status.
     """
     key = os.path.basename(filename)
+    texts = _file_match_texts(key, object_name)
     tests: List[RegexpTestResult] = []
     matched_project: Optional[Dict[str, Any]] = None
     for project in projects:
-        label = _project_match_label(project)
+        project_id = project.get("project_id")
         for kind, pattern in _project_match_patterns(project):
-            matched = _pattern_matches_filename(kind, pattern, key)
-            tests.append((label, kind, pattern, matched))
+            matched = _pattern_matches_texts(kind, pattern, texts)
+            tests.append((project_id, kind, pattern, matched))
             if matched and matched_project is None:
                 matched_project = project
     return matched_project, tests
 
 
-def _find_project_for_filename(filename: str, projects: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    project, _tests = _match_project_for_filename(filename, projects)
+def _find_project_for_filename(
+    filename: str,
+    projects: List[Dict[str, Any]],
+    object_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    project, _tests = _match_project_for_file(filename, projects, object_name=object_name)
     return project
-
-
-def _format_regexp_tests_summary(tests: List[RegexpTestResult]) -> str:
-    parts = []
-    for label, _kind, pattern, matched in tests:
-        status = "matched" if matched else "not matched"
-        parts.append(f"{label}/{pattern}:{status}")
-    return "regexps: " + " ".join(parts)
 
 
 def _format_project_regexps_display(project: Dict[str, Any]) -> str:
     raw = project.get("regexps")
     if raw is not None and str(raw).strip():
         return str(raw).strip()
-    patterns = _project_match_patterns(project)
-    if patterns and patterns[0][0] == "name":
-        return f"(fallback name: {patterns[0][1]!r})"
+    if _project_name(project):
+        return "(name only)"
     return "(none)"
 
 
@@ -917,7 +931,7 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: int = 
     project = None
     regexp_tests: List[RegexpTestResult] = []
     if projects is not None:
-        project, regexp_tests = _match_project_for_filename(key, projects)
+        project, regexp_tests = _match_project_for_file(key, projects, object_name=object)
         if project is not None:
             if project_stats is not None:
                 _update_project_stats(project_stats, project, filter, exposure)
