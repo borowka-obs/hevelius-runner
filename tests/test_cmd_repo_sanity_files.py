@@ -1,7 +1,15 @@
 from argparse import Namespace
 import builtins
+from pathlib import Path
 
 import cmd_volumes
+
+
+BLUE_HORSEHEAD_FITS = (
+    Path(__file__).parent
+    / "data"
+    / "2026-06-12_21-38-51_blue horsehead_OIII_300.00s_LIGHT_0065.fits"
+)
 
 
 class _DummyConfigManager:
@@ -249,6 +257,53 @@ def test_find_project_for_filename_falls_back_to_name_without_regexps():
     assert cmd_volumes._find_project_for_filename("M42_001.fits", projects)["project_id"] == 42
 
 
+def test_blue_horsehead_matches_project_name_in_filename():
+    assert BLUE_HORSEHEAD_FITS.is_file()
+    project = {"project_id": 7, "name": "blue horsehead"}
+    matched = cmd_volumes._find_project_for_filename(str(BLUE_HORSEHEAD_FITS), [project])
+    assert matched is not None
+    assert matched["project_id"] == 7
+
+
+def test_blue_horsehead_matches_project_regexp_against_object_header():
+    assert BLUE_HORSEHEAD_FITS.is_file()
+    project = {"project_id": 7, "name": "unrelated", "regexps": "IC.4592"}
+    matched = cmd_volumes._find_project_for_filename(
+        str(BLUE_HORSEHEAD_FITS),
+        [project],
+        object_name="IC 4592",
+    )
+    assert matched is not None
+    assert matched["project_id"] == 7
+
+
+def test_blue_horsehead_process_fits_file_matches_combined_project(capsys):
+    assert BLUE_HORSEHEAD_FITS.is_file()
+    project = {"project_id": 7, "name": "blue horsehead", "regexps": "IC.4592", "subframes": []}
+    project_stats = {}
+    tracker = {"files_without_project": 0}
+
+    cmd_volumes.process_fits_file(
+        client=object(),
+        fname=str(BLUE_HORSEHEAD_FITS),
+        show_hdr=False,
+        verbose=2,
+        projects=[project],
+        project_stats=project_stats,
+        project_tracker=tracker,
+    )
+
+    out = capsys.readouterr().out
+    assert "[matched" in out
+    assert str(BLUE_HORSEHEAD_FITS) in out
+    assert "project='blue horsehead'" in out
+    assert "regexps:" in out
+    assert "'IC.4592'/7:match" in out
+    assert "'blue horsehead'/7:match" in out
+    assert project_stats[7]["buckets"][("OIII", 300.0)] == 1
+    assert tracker["files_without_project"] == 0
+
+
 def test_process_fits_file_verbose_shows_regexp_details(monkeypatch, capsys):
     monkeypatch.setattr(cmd_volumes, "read_fits", lambda fname: {"FILTER": "Ha", "EXPTIME": 300, "OBJECT": "x"})
     monkeypatch.setattr(cmd_volumes, "get_task_by_filename", lambda client, key: None)
@@ -265,8 +320,8 @@ def test_process_fits_file_verbose_shows_regexp_details(monkeypatch, capsys):
     )
     out = capsys.readouterr().out
     assert "regexps:" in out
-    assert "M31(#1)/^M31_:matched" in out
-    assert "M42(#2)/M42:not matched" in out
+    assert "'^M31_'/1:match" in out
+    assert "'M42'/2:no match" in out
 
 
 def test_sanity_files_verbose_lists_projects_with_regexps(monkeypatch, capsys):
@@ -292,7 +347,7 @@ def test_sanity_files_verbose_lists_projects_with_regexps(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Projects and regexps:" in out
     assert "project_id=1\tM31\tregexps=^M31_" in out
-    assert "project_id=2\tM42\tregexps=(fallback name: 'M42')" in out
+    assert "project_id=2\tM42\tregexps=(name only)" in out
 
 
 class _FakeResponse:
