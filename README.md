@@ -1,10 +1,11 @@
-# Hevelius-Runner
+# Hevelius-agent
 
-Hevelius-Runner is an automation tool designed to execute planned astronomical observations in an observatory environment. It integrates with NINA (Nighttime Imaging 'N' Astronomy) software to automate the execution of observation sequences.
+Hevelius-agent is an automation tool designed to execute planned astronomical observations in an observatory
+environment on MS Windows systems. It integrates with NINA (Nighttime Imaging 'N' Astronomy) software to
+automate the execution of observation sequences.
 
-It is expected to be used with hevelius-backend, a central server that stores the observation tasks and provides the API for the runner to retrieve them.
-
-It is a very early work in progress.
+It is expected to be used with hevelius-backend, a central server that stores the observation tasks and provides
+the API for the agent to retrieve them. It is a very early work in progress.
 
 ## Features
 
@@ -20,7 +21,7 @@ It is a very early work in progress.
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.11+
 - NINA (Nighttime Imaging 'N' Astronomy) software
 - Windows operating system
 
@@ -33,8 +34,6 @@ For Usage, see [doc/usage.md](doc/usage.md).
 For trouble shooting, see [doc/troubleshooting.md](doc/troubleshooting.md).
 
 For development details, see [doc/devel.md](doc/devel.md).
-
-
 
 ## Generating a template advanced sequence file
 
