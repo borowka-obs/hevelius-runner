@@ -55,7 +55,7 @@ def test_sanity_files_specific_file(monkeypatch):
     ret = cmd_volumes.sanity_files(cm, _base_args(file=r"c:\repo\one.fits", show_header=True))
     assert ret == 0
     assert len(calls) == 1
-    assert calls[0][1] == r"c:\repo\one.fits"
+    assert calls[0][1] == cmd_volumes._resolve_path(r"c:\repo\one.fits")
     assert calls[0][2] is True
 
 
@@ -240,6 +240,52 @@ def test_process_fits_file_project_not_found_tracks_counter(monkeypatch, capsys)
     assert "unknown_001.fits" in out
     assert project_stats == {}
     assert tracker["files_without_project"] == 1
+
+
+def test_process_fits_file_skips_unreadable(monkeypatch, capsys):
+    def _boom(_fname):
+        raise FileNotFoundError(2, "No such file or directory", r"c:\astro\missing.fit")
+
+    monkeypatch.setattr(cmd_volumes, "read_fits", _boom)
+
+    tracker = {"files_without_project": 0}
+    cmd_volumes.process_fits_file(
+        client=object(),
+        fname=r"c:\astro\missing.fit",
+        show_hdr=False,
+        projects=[{"name": "M42"}],
+        project_stats={},
+        project_tracker=tracker,
+        idx=3,
+        total=10,
+    )
+    out = capsys.readouterr().out
+    assert "[skipped" in out
+    assert "unreadable:" in out
+    assert "missing.fit" in out
+    assert "[ 3/10]" in out
+    assert tracker["files_without_project"] == 0
+
+
+def test_process_fits_dir_uses_case_preserving_paths(monkeypatch, tmp_path):
+    fits_dir = tmp_path / "Blue Horsehead" / "Ha"
+    fits_dir.mkdir(parents=True)
+    target = fits_dir / "Lobster-OIII_00001.fit"
+    target.write_bytes(b"not-a-real-fits")
+
+    seen = []
+
+    def _capture(client, fname, show_hdr=False, **kwargs):
+        seen.append(fname)
+
+    monkeypatch.setattr(cmd_volumes, "process_fits_file", _capture)
+
+    cmd_volumes.process_fits_dir(client=object(), dir=str(tmp_path), show_hdr=False)
+
+    assert len(seen) == 1
+    # Must keep filesystem casing (not force through normcase) before I/O.
+    assert "Blue Horsehead" in seen[0]
+    assert seen[0].endswith("Lobster-OIII_00001.fit")
 
 
 def test_find_project_for_filename_uses_regexps():

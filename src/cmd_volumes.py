@@ -178,11 +178,17 @@ def _exclude_patterns_from_config(cm: ConfigManager) -> List[str]:
 
 
 def _normalize_full_path(path: str) -> str:
+    """Absolute path for comparisons (Windows: lowercased via normcase)."""
     return os.path.normcase(os.path.normpath(os.path.abspath(path)))
 
 
 def _resolve_path(path: str) -> str:
-    """Absolute path for filesystem I/O (preserves filename case on Windows)."""
+    """Absolute path for filesystem I/O (preserves path case on Windows).
+
+    Prefer this over :func:`_normalize_full_path` whenever the result is passed
+    to ``open`` / ``fits.open`` / ``os.rename``. ``normcase`` lowercasing can
+    make existing files unopenable on case-sensitive Windows directories.
+    """
     return os.path.normpath(os.path.abspath(path))
 
 
@@ -643,7 +649,7 @@ def process_fits_list(
             # the user-visible "n of total" tracks file rows, not blank ones).
             continue
 
-        full_path = _normalize_full_path(line)
+        full_path = _resolve_path(line)
         if _is_excluded(full_path, exclude_patterns or []):
             progress = _format_progress(cnt, total)
             print(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
@@ -832,7 +838,9 @@ def process_fits_dir(
     :param show_hdr: bool governing whether FITS headers will be printed or not
     """
 
-    files = _fits_files_in_dir(dir)
+    # resolve=True keeps filesystem casing; normcase would break open() on
+    # case-sensitive Windows directories (and is only needed for exclude matching).
+    files = _fits_files_in_dir(dir, resolve=True)
 
     print(f"Found {len(files)} files(s) in directory {dir}")
 
@@ -840,7 +848,7 @@ def process_fits_dir(
     total = len(files)
 
     for f in files:
-        full_path = _normalize_full_path(str(f))
+        full_path = str(f)
         if _is_excluded(full_path, exclude_patterns or []):
             progress = _format_progress(cnt, total)
             print(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
@@ -918,8 +926,16 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: int = 
 
     key = os.path.basename(fname)
 
-    # Extract file parameters from the header
-    h = read_fits(fname)
+    # Extract file parameters from the header. One unreadable file must not
+    # abort a multi-file volume scan (missing path, permissions, corrupt FITS).
+    try:
+        h = read_fits(fname)
+    except Exception as e:
+        progress = _format_progress(idx, total)
+        tag = _format_status_tag("skipped")
+        print(f"{progress}{tag} {fname}  (unreadable: {e})")
+        return
+
     filter = _h_str(h, "FILTER")
     object = _h_str(h, "OBJECT")
     exposure = _h_float(h, "EXPTIME")
@@ -1159,7 +1175,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
         }
 
     if args.file:
-        full_path = _normalize_full_path(args.file)
+        full_path = _resolve_path(args.file)
         if _is_excluded(full_path, exclude_patterns):
             print(f"Ignoring single file (excluded): {full_path}")
             return 0
