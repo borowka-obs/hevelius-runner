@@ -1,7 +1,6 @@
 """
 Code that handles files repository on disk.
 """
-import glob
 import logging
 import os
 import re
@@ -9,9 +8,12 @@ import sys
 import fnmatch
 from typing import Any, Dict, List, Optional, Tuple
 
-from fits import (
-    gets,
-    read_fits,
+from fits import gets
+from image_formats import (
+    header_items,
+    image_files_in_dir,
+    read_header,
+    supported_extensions_glob_display,
 )
 
 from api_client import APIClient
@@ -665,15 +667,14 @@ def process_fits_list(
         cnt += 1
 
 
-def _fits_files_in_dir(dir_path: str, *, resolve: bool = False) -> List[str]:
-    """Return full paths of all ``*.fit`` / ``*.fits`` under ``dir_path``."""
+def _image_files_in_dir(dir_path: str, *, resolve: bool = False) -> List[str]:
+    """Return full paths of all supported image files under ``dir_path``."""
     to_path = _resolve_path if resolve else _normalize_full_path
-    base = os.path.normpath(dir_path)
-    pattern_fit = os.path.join(base, "**", "*.fit")
-    pattern_fits = os.path.join(base, "**", "*.fits")
-    found_fit = glob.glob(pattern_fit, recursive=True)
-    found_fits = glob.glob(pattern_fits, recursive=True)
-    return sorted({to_path(str(f)) for f in set(found_fit) | set(found_fits)})
+    return sorted({to_path(f) for f in image_files_in_dir(dir_path)})
+
+
+# Backward-compatible alias used by older tests / callers.
+_fits_files_in_dir = _image_files_in_dir
 
 
 def _paths_from_list_file(list_path: str, *, resolve: bool = False) -> List[str]:
@@ -696,7 +697,7 @@ def _collect_target_paths(
     resolve: bool = False,
 ) -> Tuple[int, List[str]]:
     """
-    Resolve FITS file paths from ``-f`` / ``-l`` / ``-d`` or all configured volumes.
+    Resolve image file paths from ``-f`` / ``-l`` / ``-d`` or all configured volumes.
 
     Mirrors the path-selection rules used by :func:`sanity_files`.
     When ``resolve`` is True, paths keep filesystem casing (needed for rename on Windows).
@@ -710,7 +711,7 @@ def _collect_target_paths(
     elif args.list:
         paths.extend(_paths_from_list_file(args.list, resolve=resolve))
     elif args.dir:
-        paths.extend(_fits_files_in_dir(args.dir, resolve=resolve))
+        paths.extend(_image_files_in_dir(args.dir, resolve=resolve))
     else:
         volumes = _monitor_volumes_from_config(cm)
         if not volumes:
@@ -725,7 +726,7 @@ def _collect_target_paths(
             volumes = [(rp, "repo-path")]
         for path, nickname in volumes:
             print(f"Volume '{nickname}': {path}")
-            paths.extend(_fits_files_in_dir(path, resolve=resolve))
+            paths.extend(_image_files_in_dir(path, resolve=resolve))
 
     if exclude_patterns:
         paths = [p for p in paths if not _is_excluded(p, exclude_patterns)]
@@ -826,13 +827,13 @@ def process_fits_dir(
     verbose: int = 0,
 ) -> None:
     """
-    Processes all FITS files in specified directory.
+    Processes all supported image files in specified directory.
 
     :param dir: directory to be traversed
-    :param show_hdr: bool governing whether FITS headers will be printed or not
+    :param show_hdr: bool governing whether headers will be printed or not
     """
 
-    files = _fits_files_in_dir(dir)
+    files = _image_files_in_dir(dir)
 
     print(f"Found {len(files)} files(s) in directory {dir}")
 
@@ -908,18 +909,19 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: int = 
                       project_tracker: Optional[Dict[str, Any]] = None,
                       idx: Optional[int] = None,
                       total: Optional[int] = None):
-    """Processes a FITS file: optional header dump and task lookup via the API.
+    """Processes an image file: optional header dump and task lookup via the API.
 
-    Emits a single status line per file with a color-coded tag:
-    ``matched`` (green), ``unmatched`` (red), or ``skipped`` (yellow). The
-    ``idx``/``total`` parameters are optional and only used to render the
-    progress prefix when called from a batch processor.
+    Supports FITS and XISF (see :mod:`image_formats`). Emits a single status
+    line per file with a color-coded tag: ``matched`` (green), ``unmatched``
+    (red), or ``skipped`` (yellow). The ``idx``/``total`` parameters are
+    optional and only used to render the progress prefix when called from a
+    batch processor.
     """
 
     key = os.path.basename(fname)
 
-    # Extract file parameters from the header
-    h = read_fits(fname)
+    # Extract file parameters from the header (format-agnostic)
+    h = read_header(fname)
     filter = _h_str(h, "FILTER")
     object = _h_str(h, "OBJECT")
     exposure = _h_float(h, "EXPTIME")
@@ -972,8 +974,8 @@ def process_fits_file(client: APIClient,  fname, show_hdr: bool, verbose: int = 
     print(f"{progress}{tag} {fname}{params_s}{extras_s}")
 
     if show_hdr:
-        for k in h.keys():
-            print(f"    {k}: {h[k]}")
+        for k, v in header_items(h):
+            print(f"    {k}: {v}")
 
     if update_task:
         if task:
@@ -1033,8 +1035,8 @@ def _extract_task_payload_from_header(client: APIClient, h, fname: str) -> Tuple
 
 
 def task_add(client: APIClient, fname: str, verbose: bool = False):
-    """Add a task using FITS-derived values and POST /api/task-add."""
-    h = read_fits(fname)
+    """Add a task using header-derived values and POST /api/task-add."""
+    h = read_header(fname)
     payload, missing = _extract_task_payload_from_header(client, h, fname)
     if missing:
         print(
@@ -1053,7 +1055,7 @@ def task_add(client: APIClient, fname: str, verbose: bool = False):
 
 def task_update(client: APIClient, fname: str, task_id: int, verbose=False):
 
-    h = read_fits(fname)
+    h = read_header(fname)
 
     payload = {
         "task_id": task_id,
@@ -1259,7 +1261,10 @@ def sanity_files(cm: ConfigManager, args) -> int:
             return 1
         volumes = [(rp, "repo-path")]
 
-    print(f"Processing all *.fit/*.fits files across {len(volumes)} configured volume(s).")
+    print(
+        f"Processing all {supported_extensions_glob_display()} files "
+        f"across {len(volumes)} configured volume(s)."
+    )
     for path, nickname in volumes:
         print(f"Volume '{nickname}': {path}")
         if update_task:

@@ -11,7 +11,7 @@ It is a very early work in progress.
 - Retrieves observation tasks from a REST API
 - Generates NINA-compatible sequence files from observation tasks
 - Executes observations using NINA automation
-- Monitors for new FITS files and updates task status
+- Monitors for new image files (FITS and XISF) and updates task status
 - Supports custom scripts for various observation stages:
   - Startup
   - Night start/end

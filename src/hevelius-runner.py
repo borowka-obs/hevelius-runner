@@ -373,13 +373,13 @@ def _add_volumes_path_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-d",
         "--dir",
-        help="Rename all FITS files recursively under this directory.",
+        help="Rename all supported image files (FITS/XISF) recursively under this directory.",
         type=str,
     )
     parser.add_argument(
         "-a",
         "--all-files",
-        help="Rename FITS files in all configured paths.volumes (default when no -f/-l/-d).",
+        help="Rename supported image files in all configured paths.volumes (default when no -f/-l/-d).",
         action="store_true",
     )
 
@@ -439,7 +439,7 @@ def build_parser() -> argparse.ArgumentParser:
     volumes_sub = repo_parser.add_subparsers(dest="volumes_cmd", metavar="SUBCOMMAND")
     rename_parser = volumes_sub.add_parser(
         "rename",
-        help="Replace a substring in filenames (basename only) for selected FITS files.",
+        help="Replace a substring in filenames (basename only) for selected image files.",
     )
     rename_parser.add_argument(
         "old_string",
@@ -450,10 +450,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replacement text for each match in the basename.",
     )
     _add_volumes_path_args(rename_parser)
-    repo_parser.add_argument('-f', "--file", help="Check one specific FITS file", type=str)
-    repo_parser.add_argument("-l", "--list", help="Check FITS files listed in a text file (one path per line)", type=str)
-    repo_parser.add_argument("-d", "--dir",   help="Check all FITS files recursively in this specific directory", type=str)
-    repo_parser.add_argument("-s", "--show-header", help="Displays all entries in FITS header for each file", action='store_true')
+    repo_parser.add_argument('-f', "--file", help="Check one specific image file (FITS or XISF)", type=str)
+    repo_parser.add_argument("-l", "--list", help="Check image files listed in a text file (one path per line)", type=str)
+    repo_parser.add_argument("-d", "--dir",   help="Check all supported image files (FITS/XISF) recursively in this directory", type=str)
+    repo_parser.add_argument("-s", "--show-header", help="Displays all header entries for each file", action='store_true')
     repo_parser.add_argument("--tasks", help="Enable API task add/update while scanning files", action='store_true')
     repo_parser.add_argument("--projects", help="Enable project assignment/statistics while scanning files", action='store_true')
     repo_parser.add_argument("--orphans", help="With --projects, print unmatched filenames after project statistics", action='store_true')

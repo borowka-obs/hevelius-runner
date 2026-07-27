@@ -9,3 +9,4 @@ pytest
 pip-system-certs  # Needed for requests to not complain about SSL certificate
 
 astropy
+xisf>=0.9.5

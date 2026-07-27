@@ -140,8 +140,9 @@ def geti(header, param):
 
 
 def read_fits(filename):
-    """ Reads FITS file, returns its header content """
+    """Reads FITS file, returns a copy of the primary HDU header.
 
-    hdul = fits.open(filename)
-
-    return hdul[0].header
+    Prefer :func:`image_formats.read_header` for format-agnostic callers.
+    """
+    with fits.open(filename) as hdul:
+        return hdul[0].header.copy()

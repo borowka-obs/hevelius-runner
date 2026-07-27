@@ -2,6 +2,8 @@
 
 0.3.0 (unreleased)
 
+- Volumes and file monitor support PixInsight/NINA XISF (``.xisf``) in addition to FITS
+- Image discovery/header reading centralized in ``image_formats`` (extensible for future types)
 - Exclude patterns - specified files or directories can be excluded from the volumes handling.
 - Mass rename implemented (`hevelius-runner volumes rename "SUBSTRING1" "SUBSTRING2"`)
 
