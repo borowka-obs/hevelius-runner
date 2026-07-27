@@ -200,7 +200,7 @@ def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, caps
 
 
 def test_process_fits_file_project_found_updates_stats(monkeypatch, capsys):
-    monkeypatch.setattr(cmd_volumes, "read_fits", lambda fname: {"FILTER": "Ha", "EXPTIME": 300, "OBJECT": "x"})
+    monkeypatch.setattr(cmd_volumes, "read_header", lambda fname: {"FILTER": "Ha", "EXPTIME": 300, "OBJECT": "x"})
     monkeypatch.setattr(cmd_volumes, "get_task_by_filename", lambda client, key: None)
 
     project_stats = {}
@@ -222,7 +222,7 @@ def test_process_fits_file_project_found_updates_stats(monkeypatch, capsys):
 
 
 def test_process_fits_file_project_not_found_tracks_counter(monkeypatch, capsys):
-    monkeypatch.setattr(cmd_volumes, "read_fits", lambda fname: {"FILTER": "OIII", "EXPTIME": 120, "OBJECT": "x"})
+    monkeypatch.setattr(cmd_volumes, "read_header", lambda fname: {"FILTER": "OIII", "EXPTIME": 120, "OBJECT": "x"})
     monkeypatch.setattr(cmd_volumes, "get_task_by_filename", lambda client, key: None)
 
     project_stats = {}
@@ -305,7 +305,7 @@ def test_blue_horsehead_process_fits_file_matches_combined_project(capsys):
 
 
 def test_process_fits_file_verbose_shows_regexp_details(monkeypatch, capsys):
-    monkeypatch.setattr(cmd_volumes, "read_fits", lambda fname: {"FILTER": "Ha", "EXPTIME": 300, "OBJECT": "x"})
+    monkeypatch.setattr(cmd_volumes, "read_header", lambda fname: {"FILTER": "Ha", "EXPTIME": 300, "OBJECT": "x"})
     monkeypatch.setattr(cmd_volumes, "get_task_by_filename", lambda client, key: None)
 
     cmd_volumes.process_fits_file(

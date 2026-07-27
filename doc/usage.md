@@ -67,9 +67,11 @@ where subframes are or will be stored. Assuming volume is configured to y:\astro
 python src/hevelius-runner.py volumes -a
 ```
 
-to scan all FITS files in the y:\astro directory. You can use `-f filename` to scan for
-a single file, `-d dirname` to scan all files in a specific directory, `-l list` to scan
-all files listed in a file, or `-a` to scan all files in all volumes configured.
+to scan all supported image files (FITS: ``*.fit`` / ``*.fits`` / ``*.fts``, and
+PixInsight/NINA XISF: ``*.xisf``) in the y:\astro directory. You can use
+`-f filename` to scan for a single file, `-d dirname` to scan all files in a
+specific directory, `-l list` to scan all files listed in a file, or `-a` to
+scan all files in all volumes configured.
 
 Optionally, you can add `--tasks` to attempt to find tasks for each found file. If missing, a
 task will be created. Files can be assigned to one of known projects and then the
