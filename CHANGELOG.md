@@ -1,14 +1,16 @@
 # Hevelius Runner Changelog
 
-0.3.0 (unreleased)
+0.3.0 (2026-07-29)
 
-- `projects` command renamed to `project`; `project list` and `project view` now render
-  compact, table-based, color-aware output with RA/Dec in sexagesimal notation and
+- Basic installation script that makes it easier to use
+- Mass rename implemented (`hevelius-runner volumes rename "SUBSTRING1" "SUBSTRING2"`)
+- Exclude patterns - specified files or directories can be excluded from the volumes handling.
+- `projects` command renamed to `project`
+- `project list` and `project view` now render compact, table-based, color-aware output
+  with RA/Dec in sexagesimal notation and
   expanded scope name/ID for `project view`
 - Volumes and file monitor support PixInsight/NINA XISF (``.xisf``) in addition to FITS
 - Image discovery/header reading centralized in ``image_formats`` (extensible for future types)
-- Exclude patterns - specified files or directories can be excluded from the volumes handling.
-- Mass rename implemented (`hevelius-runner volumes rename "SUBSTRING1" "SUBSTRING2"`)
 
 0.2.0 (2026-04-28)
 
