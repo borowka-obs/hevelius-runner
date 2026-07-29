@@ -41,19 +41,19 @@ python src/hevelius-runner.py telescope set 4
 The list of available projects can be listed with:
 
 ```bash
-python src/hevelius-runner.py projects list
+python src/hevelius-runner.py project list
 ```
 
 Details of a specific project can be viewed with:
 
 ```bash
-python src/hevelius-runner.py projects view --name tarantula
+python src/hevelius-runner.py project view --name tarantula
 ```
 
 or
 
 ```bash
-python src/hevelius-runner.py projects view --project-id 2
+python src/hevelius-runner.py project view --project-id 2
 ```
 
 ## Volumes

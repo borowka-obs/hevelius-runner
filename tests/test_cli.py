@@ -191,6 +191,6 @@ def test_projects_command_dispatches(tmp_path, runner_mod):
     fake_nina.write_bytes(b"")
     with patch.object(runner_mod, "cmd_projects") as mock_projects:
         mock_projects.return_value = 0
-        ret = runner_mod.main(["-c", str(cfg), "projects", "list"])
+        ret = runner_mod.main(["-c", str(cfg), "project", "list"])
         assert ret == 0
         mock_projects.assert_called_once()

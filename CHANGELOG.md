@@ -2,6 +2,9 @@
 
 0.3.0 (unreleased)
 
+- `projects` command renamed to `project`; `project list` and `project view` now render
+  compact, table-based, color-aware output with RA/Dec in sexagesimal notation and
+  expanded scope name/ID for `project view`
 - Volumes and file monitor support PixInsight/NINA XISF (``.xisf``) in addition to FITS
 - Image discovery/header reading centralized in ``image_formats`` (extensible for future types)
 - Exclude patterns - specified files or directories can be excluded from the volumes handling.
