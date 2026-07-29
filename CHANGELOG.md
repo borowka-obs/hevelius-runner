@@ -9,6 +9,9 @@
 - Image discovery/header reading centralized in ``image_formats`` (extensible for future types)
 - Exclude patterns - specified files or directories can be excluded from the volumes handling.
 - Mass rename implemented (`hevelius-runner volumes rename "SUBSTRING1" "SUBSTRING2"`)
+- Fixed `FileNotFoundError` in `volumes --sanity-files` / `-d` / `-l` on case-sensitive
+  filesystems (e.g. some network/NAS mounts): file paths used for FITS/XISF header
+  reads are no longer lowercased via `normcase` before opening the file
 
 0.2.0 (2026-04-28)
 

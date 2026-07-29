@@ -645,7 +645,7 @@ def process_fits_list(
             # the user-visible "n of total" tracks file rows, not blank ones).
             continue
 
-        full_path = _normalize_full_path(line)
+        full_path = _resolve_path(line)
         if _is_excluded(full_path, exclude_patterns or []):
             progress = _format_progress(cnt, total)
             print(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
@@ -833,7 +833,7 @@ def process_fits_dir(
     :param show_hdr: bool governing whether headers will be printed or not
     """
 
-    files = _image_files_in_dir(dir)
+    files = _image_files_in_dir(dir, resolve=True)
 
     print(f"Found {len(files)} files(s) in directory {dir}")
 
@@ -841,7 +841,7 @@ def process_fits_dir(
     total = len(files)
 
     for f in files:
-        full_path = _normalize_full_path(str(f))
+        full_path = str(f)
         if _is_excluded(full_path, exclude_patterns or []):
             progress = _format_progress(cnt, total)
             print(f"{progress}{_format_status_tag('skipped')} {full_path}  (excluded)")
@@ -1161,7 +1161,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
         }
 
     if args.file:
-        full_path = _normalize_full_path(args.file)
+        full_path = _resolve_path(args.file)
         if _is_excluded(full_path, exclude_patterns):
             print(f"Ignoring single file (excluded): {full_path}")
             return 0
