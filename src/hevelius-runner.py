@@ -422,13 +422,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Numeric scope_id or exact telescope name (see telescope list).",
     )
 
-    projects = sub.add_parser("projects", help="List telescope projects or view a project in detail.")
-    projects_sub = projects.add_subparsers(dest="projects_cmd", metavar="SUBCOMMAND", required=True)
-    projects_sub.add_parser(
+    project = sub.add_parser("project", help="List telescope projects or view a project in detail.")
+    project_sub = project.add_subparsers(dest="project_cmd", metavar="SUBCOMMAND", required=True)
+    project_sub.add_parser(
         "list",
         help="Print projects for configured api.scope_id.",
     )
-    p_view = projects_sub.add_parser(
+    p_view = project_sub.add_parser(
         "view",
         help="Print all details for a project (including subframes).",
     )
@@ -501,7 +501,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_telescope_list(cm)
         if args.telescope_cmd == "set":
             return cmd_telescope_set(cm, args.identifier)
-    if command == "projects":
+    if command == "project":
         return cmd_projects(cm, args)
     if args.command == "volumes":
         return cmd_volumes(cm, args)  # see cmd_volumes.py

@@ -1,9 +1,11 @@
-import argparse
+import re
 import sys
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from api_client import APIClient, _join_api
 from config_manager import ConfigManager
+from console_color import GREEN, DIM, color_segment
 from astro import ra_to_sexagesimal, dec_to_sexagesimal
 
 
@@ -114,55 +116,80 @@ def _project_radec(project: Dict[str, Any]) -> Tuple[Any, Any]:
     return ra, dec
 
 
+def _ra_sexagesimal(ra: Any) -> str:
+    if ra is None:
+        return "—"
+    try:
+        return ra_to_sexagesimal(float(ra))
+    except (TypeError, ValueError):
+        return str(ra)
+
+
+def _dec_sexagesimal(dec: Any) -> str:
+    if dec is None:
+        return "—"
+    try:
+        dv = float(dec)
+    except (TypeError, ValueError):
+        return str(dec)
+    sx = dec_to_sexagesimal(dv)
+    return sx if sx.startswith("-") else f"+{sx}"
+
+
+def _compact_datetime(value: Any) -> str:
+    if value is None:
+        return "—"
+    s = str(value).strip()
+    if not s:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        pass
+    m = re.match(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})", s)
+    if m:
+        return f"{m.group(1)} {m.group(2)}"
+    return s[:16]
+
+
+def _table_lines(
+    headers: List[str],
+    rows: List[List[str]],
+    aligns: Optional[List[str]] = None,
+) -> List[str]:
+    """Render a box-drawn table. ``aligns`` is a per-column list of 'l' or 'r'."""
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+    aligns = aligns or ["l"] * len(headers)
+
+    def _cell(text: str, i: int) -> str:
+        return text.rjust(widths[i]) if aligns[i] == "r" else text.ljust(widths[i])
+
+    def _row(cells: List[str]) -> str:
+        return "│ " + " │ ".join(_cell(c, i) for i, c in enumerate(cells)) + " │"
+
+    top = "┌─" + "─┬─".join("─" * w for w in widths) + "─┐"
+    mid = "├─" + "─┼─".join("─" * w for w in widths) + "─┤"
+    bot = "└─" + "─┴─".join("─" * w for w in widths) + "─┘"
+
+    lines = [top, _row(headers), mid]
+    lines.extend(_row(row) for row in rows)
+    lines.append(bot)
+    return lines
+
+
 def _print_project_list(projects: List[Dict[str, Any]]) -> None:
+    headers = ["ID", "Name", "RA", "Dec"]
+    rows = []
     for project in projects:
         pid = _project_id(project)
         name = _project_name(project)
         ra, dec = _project_radec(project)
-        extras = []
-        if ra is not None:
-            try:
-                ra_sx = ra_to_sexagesimal(float(ra))
-                extras.append(f"ra={ra} ({ra_sx})")
-            except (TypeError, ValueError):
-                extras.append(f"ra={ra}")
-        if dec is not None:
-            try:
-                dec_sx = dec_to_sexagesimal(float(dec))
-                extras.append(f"dec={dec} ({dec_sx})")
-            except (TypeError, ValueError):
-                extras.append(f"dec={dec}")
-        extra_s = f" {' '.join(extras)}" if extras else ""
-        print(f"project_id={pid}\t{name}{extra_s}")
-
-
-def _fmt(value: Any, indent: int = 0) -> List[str]:
-    prefix = " " * indent
-    if isinstance(value, dict):
-        out: List[str] = []
-        for key in sorted(value.keys()):
-            v = value[key]
-            if isinstance(v, (dict, list)):
-                out.append(f"{prefix}{key}:")
-                out.extend(_fmt(v, indent + 2))
-            else:
-                out.append(f"{prefix}{key}: {v}")
-        return out
-    if isinstance(value, list):
-        out = []
-        for idx, item in enumerate(value, start=1):
-            if isinstance(item, (dict, list)):
-                out.append(f"{prefix}- item {idx}:")
-                out.extend(_fmt(item, indent + 2))
-            else:
-                out.append(f"{prefix}- {item}")
-        return out
-    return [f"{prefix}{value}"]
-
-
-def _print_project_details(project: Dict[str, Any]) -> None:
-    print("Project:")
-    for line in _fmt(project, indent=2):
+        rows.append([str(pid) if pid is not None else "—", name, _ra_sexagesimal(ra), _dec_sexagesimal(dec)])
+    for line in _table_lines(headers, rows, aligns=["r", "l", "r", "r"]):
         print(line)
 
 
@@ -244,6 +271,120 @@ def get_project_details(
     return _resolve_project_from_list(projects, project_id=project_id, name=name)
 
 
+def _scope_names(client: APIClient) -> Dict[int, str]:
+    try:
+        scopes = client.list_telescopes()
+    except Exception:
+        return {}
+    out: Dict[int, str] = {}
+    for t in scopes:
+        sid = t.get("scope_id")
+        name = t.get("name")
+        if sid is None or not name:
+            continue
+        try:
+            out[int(sid)] = str(name)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _scope_display(project: Dict[str, Any], scope_names: Dict[int, str]) -> str:
+    sid = project.get("scope_id")
+    if sid is None:
+        return "—"
+    name = scope_names.get(sid)
+    if name is None:
+        try:
+            name = scope_names.get(int(sid))
+        except (TypeError, ValueError):
+            name = None
+    return f"{name} ({sid})" if name else f"({sid})"
+
+
+_LABEL_WIDTH = 13
+
+
+def _label(text: str, stream: Any) -> str:
+    """Pad to a fixed width *before* colorizing, so ANSI codes never affect alignment."""
+    return color_segment(DIM, text.ljust(_LABEL_WIDTH), stream)
+
+
+def _print_project_details(project: Dict[str, Any], scope_names: Dict[int, str]) -> None:
+    pid = _project_id(project)
+    name = _project_name(project)
+    active = project.get("active")
+    stream = sys.stdout
+    badge = color_segment(GREEN, "active", stream) if active else color_segment(DIM, "inactive", stream)
+    title = f"#{pid} {name}" if pid is not None else name
+    print(f"{title}  [{badge}]")
+
+    ra, dec = _project_radec(project)
+    print(f"  {_label('RA/Dec:', stream)} {_ra_sexagesimal(ra)} / {_dec_sexagesimal(dec)}")
+
+    print(f"  {_label('Scope:', stream)} {_scope_display(project, scope_names)}")
+
+    total = project.get("total_integration_time")
+    hours = f"{float(total) / 3600:.1f}h" if isinstance(total, (int, float)) else "—"
+    updated = _compact_datetime(project.get("last_updated"))
+    print(f"  {_label('Integration:', stream)} {hours}    {_label('Updated:', stream)} {updated}")
+
+    start_date = project.get("start_date")
+    end_date = project.get("end_date")
+    if start_date or end_date:
+        print(f"  {_label('Window:', stream)} {start_date or '—'} → {end_date or '—'}")
+
+    description = project.get("description")
+    if description:
+        print(f"  {_label('Description:', stream)} {description}")
+
+
+def _subframe_filter_short(subframe: Dict[str, Any]) -> str:
+    filt = subframe.get("filter")
+    if isinstance(filt, dict):
+        short = filt.get("short_name")
+        if short is not None and str(short).strip():
+            return str(short).strip()
+    if filt is not None and str(filt).strip():
+        return str(filt).strip()
+    return "—"
+
+
+def _format_exposure(value: Any) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):g}s"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _print_subframes(subframes: List[Dict[str, Any]]) -> None:
+    if not subframes:
+        print("\nSubframes: none")
+        return
+    headers = ["ID", "Filter", "Exposure", "Count/Goal", "Active", "Updated"]
+    rows = []
+    for sf in subframes:
+        sid = sf.get("id")
+        count = sf.get("count")
+        goal = sf.get("goal_count")
+        count_goal = f"{count if count is not None else 0}/{goal if goal is not None else '—'}"
+        active = sf.get("active")
+        active_s = "yes" if active else ("no" if active is not None else "—")
+        rows.append([
+            str(sid) if sid is not None else "—",
+            _subframe_filter_short(sf),
+            _format_exposure(sf.get("exposure_time")),
+            count_goal,
+            active_s,
+            _compact_datetime(sf.get("last_updated")),
+        ])
+    print("\nSubframes:")
+    for line in _table_lines(headers, rows, aligns=["r", "l", "r", "r", "l", "l"]):
+        print(line)
+
+
 def cmd_projects_list(cm: ConfigManager) -> int:
     code, client = _require_api(cm)
     if code != 0 or client is None:
@@ -305,23 +446,17 @@ def cmd_projects_view(cm: ConfigManager, project_name: Optional[str], project_id
         print(f"No project found for {ident}.", file=sys.stderr)
         return 1
 
-    _print_project_details(project)
+    scope_names = _scope_names(client)
+    _print_project_details(project, scope_names)
     subframes = _subframes_from_project(project)
-    if subframes:
-        print("\nSubframes:")
-        for idx, sf in enumerate(subframes, start=1):
-            print(f"  [{idx}]")
-            for line in _fmt(sf, indent=4):
-                print(line)
-    else:
-        print("\nSubframes: none")
+    _print_subframes(subframes)
     return 0
 
 
-def cmd_projects(cm: ConfigManager, args: argparse.Namespace) -> int:
-    if args.projects_cmd == "list":
+def cmd_projects(cm: ConfigManager, args: Any) -> int:
+    if args.project_cmd == "list":
         return cmd_projects_list(cm)
-    if args.projects_cmd == "view":
+    if args.project_cmd == "view":
         return cmd_projects_view(cm, project_name=args.name, project_id=args.project_id)
-    print("Unknown projects subcommand.", file=sys.stderr)
+    print("Unknown project subcommand.", file=sys.stderr)
     return 2
