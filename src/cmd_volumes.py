@@ -638,6 +638,7 @@ def process_fits_list(
     print(f"Found {total} filename(s) in file {fname}")
 
     cnt = 1
+    failed = 0
     for line in lines:
         line = line.strip()
         if len(line) == 0 or line[0] == "#":
@@ -652,10 +653,10 @@ def process_fits_list(
             cnt += 1
             continue
 
-        process_fits_file(
+        if not _process_fits_file_safe(
             client,
             full_path,
-            show_hdr=show_hdr,
+            show_hdr,
             update_task=update_task,
             projects=projects,
             project_stats=project_stats,
@@ -663,8 +664,12 @@ def process_fits_list(
             idx=cnt,
             total=total,
             verbose=verbose,
-        )
+        ):
+            failed += 1
         cnt += 1
+
+    if failed:
+        print(f"Warning: {failed} of {total} file(s) in {fname} failed to process.", file=sys.stderr)
 
 
 def _image_files_in_dir(dir_path: str, *, resolve: bool = False) -> List[str]:
@@ -815,6 +820,42 @@ def rename_files(cm: ConfigManager, args) -> int:
     return 1 if failed else 0
 
 
+def _process_fits_file_safe(
+    client: APIClient,
+    full_path: str,
+    show_hdr: bool,
+    *,
+    update_task: bool,
+    projects: Optional[List[Dict[str, Any]]],
+    project_stats: Optional[Dict[int, Dict[str, Any]]],
+    project_tracker: Optional[Dict[str, Any]],
+    idx: Optional[int],
+    total: Optional[int],
+    verbose: int,
+) -> bool:
+    """Run :func:`process_fits_file`, catching any exception so a single bad
+    file doesn't abort the whole batch. Prints a ``failed`` status line and
+    returns ``False`` on error; returns ``True`` on success."""
+    try:
+        process_fits_file(
+            client,
+            full_path,
+            show_hdr,
+            update_task=update_task,
+            projects=projects,
+            project_stats=project_stats,
+            project_tracker=project_tracker,
+            idx=idx,
+            total=total,
+            verbose=verbose,
+        )
+        return True
+    except Exception as e:
+        progress = _format_progress(idx, total)
+        print(f"{progress}{_format_status_tag('failed')} {full_path}  ({e})")
+        return False
+
+
 def process_fits_dir(
     client: APIClient,
     dir: str,
@@ -839,6 +880,7 @@ def process_fits_dir(
 
     cnt = 1
     total = len(files)
+    failed = 0
 
     for f in files:
         full_path = str(f)
@@ -848,7 +890,7 @@ def process_fits_dir(
             cnt += 1
             continue
 
-        process_fits_file(
+        if not _process_fits_file_safe(
             client,
             full_path,
             show_hdr,
@@ -859,8 +901,12 @@ def process_fits_dir(
             idx=cnt,
             total=total,
             verbose=verbose,
-        )
+        ):
+            failed += 1
         cnt += 1
+
+    if failed:
+        print(f"Warning: {failed} of {total} file(s) in {dir} failed to process.", file=sys.stderr)
 
 
 def _format_progress(idx: Optional[int], total: Optional[int]) -> str:
@@ -878,6 +924,7 @@ def _format_status_tag(status: str) -> str:
     matched   -> green   (file matched a project)
     unmatched -> red     (no project matched)
     skipped   -> yellow  (file was excluded or otherwise not processed)
+    failed    -> red     (an error was raised while processing the file)
     """
     label = f"{status:<9}"
     if status == "matched":
@@ -886,6 +933,8 @@ def _format_status_tag(status: str) -> str:
         return f"[{_color(RED, label)}]"
     if status == "skipped":
         return f"[{_color(YELLOW, label)}]"
+    if status == "failed":
+        return f"[{_color(RED, label)}]"
     return f"[{label}]"
 
 
@@ -1166,16 +1215,18 @@ def sanity_files(cm: ConfigManager, args) -> int:
             print(f"Ignoring single file (excluded): {full_path}")
             return 0
         print(f"Processing single file: {full_path}")
-        if update_task:
-            process_fits_file(
-                client, full_path, show_hdr=args.show_header, update_task=True,
-                **_project_kwargs(), **_scan_kwargs(),
-            )
-        else:
-            process_fits_file(
-                client, full_path, show_hdr=args.show_header,
-                **_project_kwargs(), **_scan_kwargs(),
-            )
+        ok = _process_fits_file_safe(
+            client,
+            full_path,
+            args.show_header,
+            update_task=update_task,
+            projects=(_project_kwargs().get("projects")),
+            project_stats=project_stats if use_projects else None,
+            project_tracker=project_tracker if use_projects else None,
+            idx=None,
+            total=None,
+            verbose=verbose,
+        )
         if use_projects:
             _print_project_stats(
                 project_stats,
@@ -1184,7 +1235,7 @@ def sanity_files(cm: ConfigManager, args) -> int:
             )
             if not _sync_project_stats_to_server(client, project_stats):
                 return 1
-        return 0
+        return 0 if ok else 1
 
     if args.list:
         print(f"Processing list of files stored in {args.list}")

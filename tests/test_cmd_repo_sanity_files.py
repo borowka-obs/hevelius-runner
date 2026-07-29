@@ -157,6 +157,70 @@ def test_process_fits_list_skips_excluded_full_path(monkeypatch):
     assert calls[0].lower().endswith(r"good_001.fits")
 
 
+def test_process_fits_dir_continues_after_file_failure(monkeypatch, capsys):
+    files = [r"c:\astro\night\a_001.fits", r"c:\astro\night\bad_001.fits", r"c:\astro\night\c_001.fits"]
+    monkeypatch.setattr(cmd_volumes, "_image_files_in_dir", lambda dir_path, resolve=False: files)
+
+    calls = []
+
+    def _fake_process_fits_file(client, fname, show_hdr=False, **kwargs):
+        calls.append(fname)
+        if "bad" in fname:
+            raise ValueError("boom")
+
+    monkeypatch.setattr(cmd_volumes, "process_fits_file", _fake_process_fits_file)
+
+    # Should not raise even though the middle file fails.
+    cmd_volumes.process_fits_dir(client=object(), dir=r"c:\astro\night", show_hdr=False)
+
+    assert calls == files
+    out, err = capsys.readouterr()
+    assert "[failed" in out
+    assert "bad_001.fits" in out
+    assert "1 of 3 file(s)" in err
+
+
+def test_process_fits_list_continues_after_file_failure(monkeypatch, capsys):
+    calls = []
+
+    def _fake_process_fits_file(client, fname, show_hdr=False, **kwargs):
+        calls.append(fname)
+        if "bad" in fname:
+            raise ValueError("boom")
+
+    monkeypatch.setattr(cmd_volumes, "process_fits_file", _fake_process_fits_file)
+
+    listed = [
+        r"C:\astro\night\a_001.fits",
+        r"C:\astro\night\bad_001.fits",
+        r"C:\astro\night\c_001.fits",
+    ]
+
+    def _fake_open(*args, **kwargs):
+        class _F:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                return False
+
+            def readlines(self_inner):
+                return [f"{line}\n" for line in listed]
+
+        return _F()
+
+    monkeypatch.setattr(builtins, "open", _fake_open)
+
+    # Should not raise even though the middle file fails.
+    cmd_volumes.process_fits_list(client=object(), fname="ignored.txt", show_hdr=False)
+
+    assert len(calls) == 3
+    out, err = capsys.readouterr()
+    assert "[failed" in out
+    assert "bad_001.fits" in out
+    assert "1 of 3 file(s)" in err
+
+
 def test_sanity_files_with_project_prefetches_and_prints_stats(monkeypatch, capsys):
     cm = _DummyConfigManager()
     calls = []
