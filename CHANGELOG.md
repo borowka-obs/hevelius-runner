@@ -12,6 +12,10 @@
 - Fixed `FileNotFoundError` in `volumes --sanity-files` / `-d` / `-l` on case-sensitive
   filesystems (e.g. some network/NAS mounts): file paths used for FITS/XISF header
   reads are no longer lowercased via `normcase` before opening the file
+- `volumes` file scanning (`-d`, `-l`, `--sanity-files`) no longer aborts the whole run
+  if a single file fails to process (e.g. unreadable/corrupt FITS/XISF file): the file
+  is now marked `[failed]` and processing continues with the remaining files, with a
+  summary warning printed once the batch is done
 
 0.2.0 (2026-04-28)
 
